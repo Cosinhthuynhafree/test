@@ -187,7 +187,7 @@ final class APIClient {
     }
 
     func registerDevice(name: String, platform: String) async throws -> DeviceRecord {
-        let response: DeviceEnvelope = try await send("api/v1/devices", method: "POST", body: JSONEncoder().encode(RegisterDeviceBody(deviceName: name, platform: platform)))
+        let response: DeviceEnvelope = try await send("api/v1/devices", method: "POST", body: try JSONEncoder().encode(RegisterDeviceBody(deviceName: name, platform: platform)))
         deviceId = response.device.id
         persistTokens()
         return response.device
@@ -209,7 +209,7 @@ final class APIClient {
     }
 
     func pairDevice(code: String, name: String, platform: String) async throws -> DeviceRecord {
-        let response: DeviceEnvelope = try await send("api/v1/devices/pair", method: "POST", body: JSONEncoder().encode(PairDeviceBody(pairingCode: code, deviceName: name, platform: platform)))
+        let response: DeviceEnvelope = try await send("api/v1/devices/pair", method: "POST", body: try JSONEncoder().encode(PairDeviceBody(pairingCode: code, deviceName: name, platform: platform)))
         deviceId = response.device.id
         persistTokens()
         return response.device
@@ -234,11 +234,11 @@ final class APIClient {
     }
 
     func requestFriend(username: String) async throws {
-        try await sendEmpty("api/v1/friends/request", method: "POST", body: JSONEncoder().encode(RequestFriendBody(username: username)))
+        try await sendEmpty("api/v1/friends/request", method: "POST", body: try JSONEncoder().encode(RequestFriendBody(username: username)))
     }
 
     func respondFriend(userId: String, accept: Bool) async throws {
-        try await sendEmpty("api/v1/friends/\(accept ? "accept" : "reject")", method: "POST", body: JSONEncoder().encode(FriendActionBody(userId: userId)))
+        try await sendEmpty("api/v1/friends/\(accept ? "accept" : "reject")", method: "POST", body: try JSONEncoder().encode(FriendActionBody(userId: userId)))
     }
 
     func removeFriend(_ userId: String) async throws {
@@ -246,7 +246,7 @@ final class APIClient {
     }
 
     func setBlocked(_ userId: String, blocked: Bool) async throws {
-        try await sendEmpty(blocked ? "api/v1/friends/block" : "api/v1/friends/unblock", method: "POST", body: JSONEncoder().encode(FriendActionBody(userId: userId)))
+        try await sendEmpty(blocked ? "api/v1/friends/block" : "api/v1/friends/unblock", method: "POST", body: try JSONEncoder().encode(FriendActionBody(userId: userId)))
     }
 
     func chats() async throws -> [ChatRecord] {
@@ -255,7 +255,7 @@ final class APIClient {
     }
 
     func openChat(userId: String) async throws -> ChatRecord {
-        let body = JSONEncoder().encode(OpenChatBody(userId: userId))
+        let body = try JSONEncoder().encode(OpenChatBody(userId: userId))
         let envelope: ChatEnvelope = try await send("api/v1/chats", method: "POST", body: body)
         return envelope.chat
     }
@@ -266,7 +266,7 @@ final class APIClient {
     }
 
     func sendMessage(chatId: String, content: String, transferId: String? = nil) async throws -> ChatMessage {
-        let body = JSONEncoder().encode(SendMessageBody(content: content, transferId: transferId))
+        let body = try JSONEncoder().encode(SendMessageBody(content: content, transferId: transferId))
         let envelope: MessageEnvelope = try await send("api/v1/chats/\(chatId)/messages", method: "POST", body: body)
         return envelope.message
     }
@@ -276,7 +276,7 @@ final class APIClient {
     }
 
     func sendTyping(chatId: String, isTyping: Bool) async throws {
-        try await sendEmpty("api/v1/chats/\(chatId)/typing", method: "POST", body: JSONEncoder().encode(TypingBody(isTyping: isTyping)))
+        try await sendEmpty("api/v1/chats/\(chatId)/typing", method: "POST", body: try JSONEncoder().encode(TypingBody(isTyping: isTyping)))
     }
 
     func transfers() async throws -> [TransferRecord] {
@@ -292,7 +292,7 @@ final class APIClient {
             let digest = try hashFile(at: url)
             items.append(TransferItemRequest(fileName: url.lastPathComponent, size: size, mimeType: mimeType(for: url), sha256: digest))
         }
-        let body = JSONEncoder().encode(CreateTransferBody(receiverId: receiverId, items: items))
+        let body = try JSONEncoder().encode(CreateTransferBody(receiverId: receiverId, items: items))
         let created: TransferCreateResponse = try await send("api/v1/transfers/create", method: "POST", body: body)
         return created
     }
@@ -429,7 +429,12 @@ final class APIClient {
             request = authorizedRequest(url, method: "GET")
             (data, response) = try await session.data(for: request)
         }
-        return try decode(data, response: response)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let reason = (try? JSONDecoder().decode(APIErrorEnvelope.self, from: data).error.message) ?? "The service rejected the request."
+            throw APIClientError.server(status, reason)
+        }
+        return try JSONDecoder().decode(Response.self, from: data)
     }
 
     private func send<Response: Decodable>(_ route: String, method: String = "GET", body: Data? = nil, authenticated: Bool = true) async throws -> Response {
