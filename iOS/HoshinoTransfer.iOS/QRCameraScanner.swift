@@ -74,10 +74,10 @@ struct PairByQRView: View {
                 Text("Allow camera access or type the eight-digit code on the Devices screen.")
                     .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
             } else {
-                CameraScannerView { raw in
+                CameraScannerView(onCode: { raw in
                     guard parsedCode == nil, let code = Self.pairingCode(from: raw) else { return }
                     parsedCode = code
-                }
+                }, failed: $cameraFailed)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .ignoresSafeArea()
             }
