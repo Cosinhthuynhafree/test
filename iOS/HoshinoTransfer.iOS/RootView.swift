@@ -244,6 +244,9 @@ struct DevicesView: View {
                     Task { await session.pairDevice(code: pairingInput, name: newDeviceName.isEmpty ? UIDevice.current.name : newDeviceName) }
                 }
                 .disabled(pairingInput.count != 8)
+                NavigationLink { PairByQRView() } label: {
+                    Label("Scan pairing QR code", systemImage: "qrcode.viewfinder")
+                }
             }
             Section("Registered devices") {
                 ForEach(session.devices) { device in

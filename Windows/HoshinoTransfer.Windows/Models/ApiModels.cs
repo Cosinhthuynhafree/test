@@ -5,6 +5,18 @@ public sealed class UserDto
     public string Id { get; set; } = "";
     public string Username { get; set; } = "";
     public string DisplayName { get; set; } = "";
+
+    public string Initials
+    {
+        get
+        {
+            var source = string.IsNullOrWhiteSpace(DisplayName) ? Username : DisplayName;
+            var parts = source.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (parts.Length == 0) return "?";
+            if (parts.Length == 1) return parts[0][..1].ToUpperInvariant();
+            return $"{parts[0][0]}{parts[^1][0]}".ToUpperInvariant();
+        }
+    }
 }
 
 public sealed class FriendsResponse { public List<FriendDto> Friends { get; set; } = []; }
@@ -48,6 +60,7 @@ public sealed class MessageDto
     public string? TransferId { get; set; }
     public string Timestamp { get; set; } = "";
     public string Status { get; set; } = "";
+    public bool IsOwn { get; set; }
 }
 
 public sealed class TransfersResponse { public List<TransferDto> Transfers { get; set; } = []; }

@@ -34,6 +34,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private string _transferEta = "—";
     private double _transferPercent;
     private string _typingStatus = "";
+    private System.Windows.Media.ImageSource? _pairingQrImage;
+    private System.Windows.Threading.DispatcherTimer? _typingTimer;
+    private readonly List<MessageDto> _failedOutbox = [];
     private DeviceDto? _selectedDevice;
     private UserDto? _selectedSearchUser;
     private string _deviceName = Environment.MachineName;
@@ -78,6 +81,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         UnblockFriendCommand = new AsyncRelayCommand(UnblockSelectedFriendAsync, () => !IsBusy && SelectedFriend is not null && SelectedFriend.State == "Blocked");
         SelectFriendCommand = new AsyncRelayCommand(OpenChatAsync, () => SelectedFriend is not null && !IsBusy);
         SendMessageCommand = new AsyncRelayCommand(SendMessageAsync, () => !IsSending && !string.IsNullOrWhiteSpace(MessageDraft));
+        RetryFailedMessagesCommand = new AsyncRelayCommand(RetryFailedMessagesAsync, () => !IsSending && _failedOutbox.Count > 0);
         RegisterDeviceCommand = new AsyncRelayCommand(RegisterDeviceAsync, () => !IsBusy && !string.IsNullOrWhiteSpace(DeviceName));
         CreatePairingCodeCommand = new AsyncRelayCommand(CreatePairingCodeAsync, () => !IsBusy);
         PairDeviceCommand = new AsyncRelayCommand(PairDeviceAsync, () => !IsBusy && PairingCode.Length == 8);
@@ -126,6 +130,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public string TransferEta { get => _transferEta; private set => Set(ref _transferEta, value); }
     public double TransferPercent { get => _transferPercent; private set => Set(ref _transferPercent, value); }
     public string TypingStatus { get => _typingStatus; private set => Set(ref _typingStatus, value); }
+    public System.Windows.Media.ImageSource? PairingQrImage { get => _pairingQrImage; private set { if (Set(ref _pairingQrImage, value)) OnPropertyChanged(nameof(HasPairingQr)); } }
+    public bool HasPairingQr => PairingQrImage is not null;
+    public string CurrentUserId => _currentUserId;
     public string CurrentChatId { get => _currentChatId; private set => Set(ref _currentChatId, value); }
     public string CurrentPeerName { get => _currentPeerName; private set => Set(ref _currentPeerName, value); }
     public string SelectedTransferId { get => _selectedTransferId; set { if (Set(ref _selectedTransferId, value)) { CancelTransferCommand.NotifyCanExecuteChanged(); PauseTransferCommand.NotifyCanExecuteChanged(); ResumeTransferCommand.NotifyCanExecuteChanged(); RetryTransferCommand.NotifyCanExecuteChanged(); } } }
@@ -170,6 +177,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public AsyncRelayCommand UnblockFriendCommand { get; }
     public AsyncRelayCommand SelectFriendCommand { get; }
     public AsyncRelayCommand SendMessageCommand { get; }
+    public AsyncRelayCommand RetryFailedMessagesCommand { get; }
     public AsyncRelayCommand RegisterDeviceCommand { get; }
     public AsyncRelayCommand CreatePairingCodeCommand { get; }
     public AsyncRelayCommand PairDeviceCommand { get; }
@@ -299,6 +307,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
                 case "ready":
                     _ = RefreshDataAsync();
                     _ = RefreshOpenChatAsync();
+                    _ = RetryFailedMessagesAsync();
                     break;
                 case "friend.request": NoticeMessage = "A friend request arrived."; _ = RefreshDataAsync(); break;
                 case "friend.accept": case "friend.reject": case "friend.unblocked": NoticeMessage = $"Friend relationship updated: {eventName}."; _ = RefreshDataAsync(); break;
@@ -306,9 +315,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
                 case "device.paired": NoticeMessage = "A device paired with your account."; _ = RefreshDataAsync(); break;
                 case "chat.message":
                     var envelope = JsonSerializer.Deserialize<RealtimeMessageEnvelope>(json, JsonOptions);
-                    if (envelope is not null && envelope.ChatId == CurrentChatId && Messages.All(message => message.Id != envelope.Id))
+                    if (envelope is not null && envelope.ChatId == CurrentChatId)
                     {
-                        Messages.Add(envelope.ToMessage());
+                        AddMessage(envelope.ToMessage());
                         if (envelope.SenderId != _currentUserId) _ = _api.MarkChatReadAsync(CurrentChatId, _lifetime.Token);
                     }
                     _ = RefreshDataAsync(); break;
@@ -320,7 +329,15 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
                     break;
                 case "chat.typing":
                     var typing = JsonSerializer.Deserialize<TypingEventEnvelope>(json, JsonOptions);
-                    TypingStatus = typing?.IsTyping == true ? "Typing…" : "";
+                    if (typing?.IsTyping == true)
+                    {
+                        TypingStatus = "Typing…";
+                        _typingTimer ??= new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(4) };
+                        _typingTimer.Stop();
+                        _typingTimer.Tick += (_, _) => { TypingStatus = ""; _typingTimer.Stop(); };
+                        _typingTimer.Start();
+                    }
+                    else TypingStatus = "";
                     break;
                 case "transfer.request":
                     var request = JsonSerializer.Deserialize<TransferEventEnvelope>(json, JsonOptions);
@@ -352,8 +369,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         try
         {
             var result = await _api.GetMessagesAsync(CurrentChatId, _lifetime.Token);
-            foreach (var message in result.Messages)
-                if (Messages.All(existing => existing.Id != message.Id)) Messages.Add(message);
+            foreach (var message in result.Messages) AddMessage(message);
             await _api.MarkChatReadAsync(CurrentChatId, _lifetime.Token);
         }
         catch (Exception ex) when (ex is ApiException or HttpRequestException or TaskCanceledException) { }
@@ -430,9 +446,30 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         {
             var result = await _api.CreatePairingCodeAsync(_lifetime.Token);
             PairingCode = result.PairingCode;
-            NoticeMessage = $"Pair code expires in {result.ExpiresInSeconds / 60} minutes. Enter it on the second signed-in device.";
+            PairingQrImage = RenderPairingQr(result.PairingCode);
+            NoticeMessage = $"Pair code expires in {result.ExpiresInSeconds / 60} minutes. Scan it or type it on the second signed-in device.";
         }
         catch (Exception ex) when (ex is ApiException or HttpRequestException or TaskCanceledException) { ErrorMessage = ex.Message; }
+    }
+
+    private static System.Windows.Media.ImageSource? RenderPairingQr(string code)
+    {
+        try
+        {
+            using var generator = new QRCoder.QRCodeGenerator();
+            var data = generator.CreateQrCode($"hoshinotransfer://pair?code={code}", QRCoder.QRCodeGenerator.ECCLevel.M);
+            using var pngRenderer = new QRCoder.PngByteQRCode(data);
+            var png = pngRenderer.GetGraphic(8);
+            var image = new System.Windows.Media.Imaging.BitmapImage();
+            using var stream = new MemoryStream(png);
+            image.BeginInit();
+            image.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+            image.StreamSource = stream;
+            image.EndInit();
+            image.Freeze();
+            return image;
+        }
+        catch { return null; }
     }
 
     private async Task PairDeviceAsync()
@@ -493,7 +530,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             var chat = await _api.OpenChatAsync(SelectedFriend.User.Id, _lifetime.Token);
             CurrentChatId = chat.Id; _currentPeerId = SelectedFriend.User.Id; CurrentPeerName = SelectedFriend.User.DisplayName;
             var messages = await _api.GetMessagesAsync(chat.Id, _lifetime.Token);
-            Messages.Clear(); foreach (var message in messages.Messages) Messages.Add(message);
+            Messages.Clear(); foreach (var message in messages.Messages) AddMessage(message);
             await _api.MarkChatReadAsync(chat.Id, _lifetime.Token);
             Navigate("Chat");
         }
@@ -501,14 +538,69 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         finally { IsBusy = false; }
     }
 
+    private void AddMessage(MessageDto message)
+    {
+        message.IsOwn = message.SenderId == _currentUserId;
+        if (Messages.Any(existing => existing.Id == message.Id)) return;
+        Messages.Add(message);
+    }
+
     private async Task SendMessageAsync()
     {
         var content = MessageDraft.Trim();
         if (string.IsNullOrEmpty(content) || string.IsNullOrEmpty(CurrentChatId)) return;
         IsSending = true;
-        try { var message = await _api.SendMessageAsync(CurrentChatId, content, ct: _lifetime.Token); if (Messages.All(existing => existing.Id != message.Id)) Messages.Add(message); MessageDraft = ""; }
-        catch (Exception ex) when (ex is ApiException or HttpRequestException or TaskCanceledException) { ErrorMessage = ex.Message; }
+        try
+        {
+            var message = await _api.SendMessageAsync(CurrentChatId, content, ct: _lifetime.Token);
+            AddMessage(message);
+            MessageDraft = "";
+        }
+        catch (Exception ex) when (ex is ApiException or HttpRequestException or TaskCanceledException)
+        {
+            ErrorMessage = ex.Message;
+            QueueFailedMessage(content, ex.Message);
+        }
         finally { IsSending = false; }
+    }
+
+    private void QueueFailedMessage(string content, string reason)
+    {
+        var failed = new MessageDto
+        {
+            Id = $"local-{Guid.NewGuid():N}",
+            SenderId = _currentUserId,
+            Content = content,
+            Timestamp = DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+            Status = "Failed",
+            IsOwn = true,
+        };
+        _failedOutbox.Add(failed);
+        AddMessage(failed);
+        NoticeMessage = $"Message queued for retry: {reason}";
+    }
+
+    private async Task RetryFailedMessagesAsync()
+    {
+        if (_failedOutbox.Count == 0 || string.IsNullOrEmpty(CurrentChatId)) return;
+        var pending = _failedOutbox.ToList();
+        _failedOutbox.Clear();
+        foreach (var failed in pending)
+        {
+            try
+            {
+                var sent = await _api.SendMessageAsync(CurrentChatId, failed.Content, ct: _lifetime.Token);
+                Messages.Remove(failed);
+                AddMessage(sent);
+            }
+            catch (Exception ex) when (ex is ApiException or HttpRequestException or TaskCanceledException)
+            {
+                _failedOutbox.Add(failed);
+                NoticeMessage = $"Retry deferred: {ex.Message}";
+                return;
+            }
+        }
+        NoticeMessage = "Queued messages delivered.";
     }
 
     private async Task RegisterDeviceAsync()
@@ -570,7 +662,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             {
                 var summary = transfer.Items.Count == 1 ? $"Shared {transfer.Items[0].FileName}" : $"Shared {transfer.Items.Count} files";
                 var attachment = await _api.SendMessageAsync(CurrentChatId, summary, transfer.Id, _lifetime.Token);
-                if (Messages.All(message => message.Id != attachment.Id)) Messages.Add(attachment);
+                AddMessage(attachment);
             }
             IsBusy = false;
 
