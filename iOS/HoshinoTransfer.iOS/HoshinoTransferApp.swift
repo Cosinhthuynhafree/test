@@ -293,7 +293,10 @@ final class SessionStore: ObservableObject {
                 do {
                     self.connectionStatus = "Connected"
                     try await self.api.listenEvents { [weak self] eventName, data in
-                        await self?.handleEvent(eventName, data: data)
+                        guard let self else { return }
+                        Task { @MainActor in
+                            await self.handleEvent(eventName, data: data)
+                        }
                     }
                 } catch {
                     self.connectionStatus = "Reconnecting…"
