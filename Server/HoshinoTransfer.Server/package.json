@@ -1,0 +1,14 @@
+{
+  "name": "hoshinotransfer-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "HoshinoTransfer API, sessions, realtime events, and server-relay transfer service",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test",
+    "check": "node --check server.js && node --check database.js && node --check auth.js"
+  }
+}

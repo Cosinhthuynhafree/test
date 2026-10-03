@@ -1,0 +1,142 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 60;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		100000000000000000000001 /* HoshinoTransferApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000001 /* HoshinoTransferApp.swift */; };
+		100000000000000000000002 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000002 /* APIClient.swift */; };
+		100000000000000000000003 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000003 /* RootView.swift */; };
+		100000000000000000000004 /* SessionKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000006 /* SessionKeychain.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		200000000000000000000001 /* HoshinoTransferApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoshinoTransferApp.swift; sourceTree = "<group>"; };
+		200000000000000000000002 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
+		200000000000000000000003 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		200000000000000000000004 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		200000000000000000000006 /* SessionKeychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionKeychain.swift; sourceTree = "<group>"; };
+		200000000000000000000005 /* HoshinoTransfer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = HoshinoTransfer.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		300000000000000000000001 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		400000000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				400000000000000000000002 /* HoshinoTransfer.iOS */,
+				400000000000000000000003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		400000000000000000000002 /* HoshinoTransfer.iOS */ = {
+			isa = PBXGroup;
+			children = (
+				200000000000000000000001 /* HoshinoTransferApp.swift */,
+				200000000000000000000002 /* APIClient.swift */,
+				200000000000000000000003 /* RootView.swift */,
+				200000000000000000000006 /* SessionKeychain.swift */,
+				200000000000000000000004 /* Info.plist */,
+			);
+			sourceTree = "<group>";
+		};
+		400000000000000000000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (200000000000000000000005 /* HoshinoTransfer.app */,);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		500000000000000000000001 /* HoshinoTransfer */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 700000000000000000000002 /* Build configuration list for PBXNativeTarget */;
+			buildPhases = (
+				300000000000000000000001 /* Frameworks */,
+				600000000000000000000001 /* Sources */,
+				300000000000000000000002 /* Resources */,
+			);
+			buildRules = ();
+			dependencies = ();
+			name = HoshinoTransfer;
+			productName = HoshinoTransfer;
+			productReference = 200000000000000000000005 /* HoshinoTransfer.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+			500000000000000000000002 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = { 500000000000000000000001 = { CreatedOnToolsVersion = 16.0; }; };
+			};
+			buildConfigurationList = 700000000000000000000001 /* Build configuration list for PBXProject */;
+			compatibilityVersion = "Xcode 15.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			mainGroup = 400000000000000000000001;
+			productRefGroup = 400000000000000000000003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (500000000000000000000001 /* HoshinoTransfer */,);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		300000000000000000000002 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		600000000000000000000001 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; 		files = (
+			100000000000000000000001 /* HoshinoTransferApp.swift in Sources */,
+			100000000000000000000002 /* APIClient.swift in Sources */,
+			100000000000000000000003 /* RootView.swift in Sources */,
+			100000000000000000000004 /* SessionKeychain.swift in Sources */,
+		); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		800000000000000000000001 /* Debug project */ = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; SDKROOT = iphoneos; SWIFT_VERSION = 5.0; }; name = Debug; };
+		800000000000000000000002 /* Release project */ = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; SDKROOT = iphoneos; SWIFT_VERSION = 5.0; }; name = Release; };
+		800000000000000000000003 /* Debug target */ = {isa = XCBuildConfiguration; buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = HoshinoTransfer.iOS/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.hoshino.transfer.ios;
+				PRODUCT_NAME = HoshinoTransfer;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			}; name = Debug; };
+		800000000000000000000004 /* Release target */ = {isa = XCBuildConfiguration; buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = HoshinoTransfer.iOS/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.hoshino.transfer.ios;
+				PRODUCT_NAME = HoshinoTransfer;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			}; name = Release; };
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		700000000000000000000001 /* Project configuration list */ = {isa = XCConfigurationList; buildConfigurations = (800000000000000000000001 /* Debug project */, 800000000000000000000002 /* Release project */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		700000000000000000000002 /* Target configuration list */ = {isa = XCConfigurationList; buildConfigurations = (800000000000000000000003 /* Debug target */, 800000000000000000000004 /* Release target */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+/* End XCConfigurationList section */
+	};
+	rootObject = 500000000000000000000002 /* Project object */;
+}

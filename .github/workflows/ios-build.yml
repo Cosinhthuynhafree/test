@@ -1,0 +1,64 @@
+name: iOS Unsigned IPA
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "iOS/**"
+      - ".github/workflows/ios-build.yml"
+
+permissions:
+  contents: read
+
+env:
+  SCHEME: HoshinoTransfer
+  PROJECT: iOS/HoshinoTransfer.iOS/HoshinoTransfer.xcodeproj
+
+jobs:
+  build-unsigned-ipa:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Resolve Swift package dependencies
+        run: xcodebuild -resolvePackageDependencies -project "$PROJECT" -scheme "$SCHEME"
+
+      - name: Build unsigned iOS app
+        run: >-
+          xcodebuild
+          -project "$PROJECT"
+          -scheme "$SCHEME"
+          -configuration Release
+          -sdk iphoneos
+          -destination 'generic/platform=iOS'
+          -derivedDataPath build/DerivedData
+          CODE_SIGNING_ALLOWED=NO
+          CODE_SIGNING_REQUIRED=NO
+          CODE_SIGN_IDENTITY=""
+          build
+
+      - name: Package app as LiveContainer IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_PATH="build/DerivedData/Build/Products/Release-iphoneos/HoshinoTransfer.app"
+          test -d "$APP_PATH"
+          mkdir -p build/ipa/Payload
+          cp -R "$APP_PATH" build/ipa/Payload/HoshinoTransfer.app
+          (cd build/ipa && /usr/bin/zip -qry ../../HoshinoTransfer.ipa Payload)
+          test -s HoshinoTransfer.ipa
+          echo "Created unsigned sideload IPA (not Apple-signed): $(du -h HoshinoTransfer.ipa | cut -f1)"
+
+      - name: Upload HoshinoTransfer.ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: HoshinoTransfer-iOS-unsigned-IPA
+          path: HoshinoTransfer.ipa
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,345 @@
+import SwiftUI
+
+@main
+struct HoshinoTransferApp: App {
+    @StateObject private var session = SessionStore()
+
+    var body: some Scene {
+        WindowGroup {
+            RootView()
+                .environmentObject(session)
+                .preferredColorScheme(.dark)
+                .task { await session.bootstrap() }
+        }
+    }
+}
+
+@MainActor
+final class SessionStore: ObservableObject {
+    @Published private(set) var user: UserProfile?
+    @Published private(set) var friends: [FriendRecord] = []
+    @Published private(set) var searchResults: [UserProfile] = []
+    @Published private(set) var devices: [DeviceRecord] = []
+    @Published private(set) var chats: [ChatRecord] = []
+    @Published private(set) var messages: [ChatMessage] = []
+    @Published private(set) var transfers: [TransferRecord] = []
+    @Published var incomingTransfer: TransferRecord?
+    @Published private(set) var activeChat: ChatRecord?
+    @Published private(set) var pairingCode: PairingCode?
+    @Published private(set) var serviceStatus = "Not checked"
+    @Published private(set) var connectionStatus = "Disconnected"
+    @Published private(set) var errorMessage: String?
+    @Published private(set) var transferFraction = 0.0
+    @Published private(set) var transferSpeed = 0.0
+    @Published private(set) var transferEta: TimeInterval?
+    @Published private(set) var savedFiles: [URL] = []
+    @Published private(set) var isWorking = false
+
+    private let api = APIClient()
+    private var eventsTask: Task<Void, Never>?
+    private var typingTask: Task<Void, Never>?
+    private var knownFileURLs: [String: [URL]] = [:]
+
+    var isAuthenticated: Bool { user != nil && api.isAuthenticated }
+    var serviceHost: String { api.baseURL.host ?? "HoshinoTransfer service" }
+    var currentUserId: String { user?.id ?? "" }
+
+    func bootstrap() async {
+        do {
+            if let restored = try await api.restoreProfile() {
+                user = restored
+                try await ensureDeviceRegistered()
+                await refreshAll()
+                startEventStream()
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        do { serviceStatus = try await checkHealth() }
+        catch { serviceStatus = error.localizedDescription }
+    }
+
+    func authenticate(username: String, displayName: String, password: String, registering: Bool) async throws {
+        isWorking = true
+        defer { isWorking = false }
+        let result = try await api.authenticate(username: username, displayName: displayName, password: password, registering: registering)
+        user = result.user
+        errorMessage = nil
+        try await ensureDeviceRegistered()
+        startEventStream()
+        await refreshAll()
+    }
+
+    func signOut() async {
+        eventsTask?.cancel(); eventsTask = nil
+        typingTask?.cancel(); typingTask = nil
+        do { try await api.logout() } catch { errorMessage = error.localizedDescription }
+        user = nil; friends = []; searchResults = []; devices = []; chats = []; messages = []; transfers = []
+        incomingTransfer = nil; activeChat = nil; connectionStatus = "Disconnected"
+    }
+
+    func checkHealth() async throws -> String {
+        let result = try await api.health()
+        return "Connected · API v\(result.apiVersion)"
+    }
+
+    func refreshAll() async {
+        guard isAuthenticated else { return }
+        do {
+            async let friendsValue = api.friends()
+            async let devicesValue = api.devices()
+            async let chatsValue = api.chats()
+            async let transfersValue = api.transfers()
+            friends = try await friendsValue
+            devices = try await devicesValue
+            chats = try await chatsValue
+            transfers = try await transfersValue
+            if incomingTransfer == nil || incomingTransfer?.status != "Pending" {
+                incomingTransfer = transfers.first(where: { $0.receiverId == currentUserId && $0.status == "Pending" })
+            }
+            serviceStatus = "Connected · \(serviceHost)"
+            errorMessage = nil
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    func searchUsers(_ query: String) async {
+        guard query.trimmingCharacters(in: .whitespacesAndNewlines).count >= 3 else { searchResults = []; return }
+        do { searchResults = try await api.searchUsers(query.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    func addFriend(_ user: UserProfile) async {
+        do { try await api.requestFriend(username: user.username); await refreshAll() }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    func answerFriendRequest(_ friend: FriendRecord, accept: Bool) async {
+        do { try await api.respondFriend(userId: friend.user.id, accept: accept); await refreshAll() }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    func removeFriend(_ friend: FriendRecord) async {
+        do { try await api.removeFriend(friend.user.id); await refreshAll() }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    func setBlocked(_ friend: FriendRecord, blocked: Bool) async {
+        do { try await api.setBlocked(friend.user.id, blocked: blocked); await refreshAll() }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    func registerCurrentDevice(name: String) async {
+        do { _ = try await api.registerDevice(name: name, platform: "iOS"); await refreshAll(); startEventStream() }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    func createPairingCode() async {
+        do { pairingCode = try await api.createPairingCode() }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    func pairDevice(code: String, name: String) async {
+        do { _ = try await api.pairDevice(code: code, name: name, platform: "iOS"); pairingCode = nil; await refreshAll() }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    func revokeDevice(_ device: DeviceRecord) async {
+        do { try await api.revokeDevice(device.id); await refreshAll() }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    func openChat(with friend: FriendRecord) async {
+        guard friend.state == "Accepted" else { errorMessage = "Accept the friend request before opening a chat."; return }
+        do {
+            let chat = try await api.openChat(userId: friend.user.id)
+            activeChat = chat
+            messages = try await api.messages(chatId: chat.id)
+            try await api.markRead(chatId: chat.id)
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    func sendMessage(_ text: String, attachmentId: String? = nil) async {
+        guard let chat = activeChat else { return }
+        do {
+            let message = try await api.sendMessage(chatId: chat.id, content: text, transferId: attachmentId)
+            if !messages.contains(where: { $0.id == message.id }) { messages.append(message) }
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    func typingChanged(_ isTyping: Bool) {
+        guard let chat = activeChat else { return }
+        typingTask?.cancel()
+        typingTask = Task {
+            if isTyping {
+                try? await api.sendTyping(chatId: chat.id, isTyping: true)
+                try? await Task.sleep(for: .seconds(2))
+            }
+            try? await api.sendTyping(chatId: chat.id, isTyping: false)
+        }
+    }
+
+    func sendFiles(_ urls: [URL], to receiverId: String, in chat: ChatRecord? = nil) async {
+        guard !urls.isEmpty else { return }
+        isWorking = true
+        errorMessage = nil
+        transferFraction = 0; transferSpeed = 0; transferEta = nil
+        let scoped = urls.filter { $0.startAccessingSecurityScopedResource() }
+        defer { scoped.forEach { $0.stopAccessingSecurityScopedResource() }; isWorking = false }
+        do {
+            let created = try await api.createTransfer(receiverId: receiverId, files: urls)
+            knownFileURLs[created.transfer.id] = urls
+            transfers.insert(created.transfer, at: 0)
+            if let chat {
+                let title = created.transfer.items.count == 1 ? "Shared \(created.transfer.items[0].fileName)" : "Shared \(created.transfer.items.count) files"
+                await sendMessage(title, attachmentId: created.transfer.id)
+            }
+            let accepted = try await waitForTransfer(created.transfer.id, terminal: ["Transferring", "Cancelled", "Failed"])
+            guard accepted.status == "Transferring" else { throw APIClientError.transferState(accepted.status) }
+            let completed = try await api.uploadAcceptedTransfer(accepted, sourceURLs: urls) { [weak self] fraction, speed, eta in
+                self?.transferFraction = fraction
+                self?.transferSpeed = speed
+                self?.transferEta = eta
+            }
+            replaceTransfer(completed)
+            transferFraction = 1
+        } catch { errorMessage = error.localizedDescription }
+        await refreshAll()
+    }
+
+    func acceptIncoming(_ transfer: TransferRecord) async {
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            _ = try await api.transferAction(transfer.id, action: "accept")
+            incomingTransfer = nil
+            let completed = try await waitForTransfer(transfer.id, terminal: ["Completed", "Failed", "Cancelled"])
+            guard completed.status == "Completed" else { throw APIClientError.transferState(completed.status) }
+            let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appending(path: "HoshinoTransfer")
+            savedFiles = try await api.acceptAndDownload(TransferRecord(
+                id: completed.id, senderId: completed.senderId, receiverId: completed.receiverId,
+                status: completed.status, transport: completed.transport, expiresAt: completed.expiresAt,
+                chunkSize: completed.chunkSize, items: completed.items), to: folder)
+        } catch { errorMessage = error.localizedDescription }
+        await refreshAll()
+    }
+
+    func declineIncoming(_ transfer: TransferRecord) async {
+        do { _ = try await api.transferAction(transfer.id, action: "decline"); incomingTransfer = nil; await refreshAll() }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    func cancelTransfer(_ transfer: TransferRecord) async {
+        do { _ = try await api.transferAction(transfer.id, action: "cancel"); await refreshAll() }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    func pauseTransfer(_ transfer: TransferRecord) async {
+        do { _ = try await api.transferAction(transfer.id, action: "pause"); await refreshAll() }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    func resumeTransfer(_ transfer: TransferRecord) async {
+        guard let urls = knownFileURLs[transfer.id] else { errorMessage = "Original files must be selected again to resume this transfer."; return }
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            let resumed = try await api.transferAction(transfer.id, action: "resume")
+            let complete = try await api.uploadAcceptedTransfer(resumed, sourceURLs: urls) { [weak self] fraction, speed, eta in
+                self?.transferFraction = fraction; self?.transferSpeed = speed; self?.transferEta = eta
+            }
+            replaceTransfer(complete)
+            transferFraction = 1
+            await refreshAll()
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    func retryTransfer(_ transfer: TransferRecord) async {
+        guard let urls = knownFileURLs[transfer.id] else { errorMessage = "Select the source files again to retry."; return }
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            let retry = try await api.transferAction(transfer.id, action: "retry")
+            knownFileURLs[retry.id] = urls
+            transfers.insert(retry, at: 0)
+            let accepted = try await waitForTransfer(retry.id, terminal: ["Transferring", "Cancelled", "Failed"])
+            guard accepted.status == "Transferring" else { throw APIClientError.transferState(accepted.status) }
+            let complete = try await api.uploadAcceptedTransfer(accepted, sourceURLs: urls) { [weak self] fraction, speed, eta in
+                self?.transferFraction = fraction; self?.transferSpeed = speed; self?.transferEta = eta
+            }
+            replaceTransfer(complete)
+            await refreshAll()
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    func refreshChatIfOpen() async {
+        guard let activeChat else { return }
+        do { messages = try await api.messages(chatId: activeChat.id); try await api.markRead(chatId: activeChat.id) }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    private func ensureDeviceRegistered() async throws {
+        if api.deviceId != nil {
+            do { try await api.heartbeatDevice(); return }
+            catch APIClientError.server(let status, _) where status == 404 { }
+        }
+        _ = try await api.registerDevice(name: UIDevice.current.name, platform: "iOS")
+    }
+
+    private func startEventStream() {
+        eventsTask?.cancel()
+        eventsTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled && self.isAuthenticated {
+                do {
+                    self.connectionStatus = "Connected"
+                    try await self.api.listenEvents { [weak self] eventName, data in
+                        await self?.handleEvent(eventName, data: data)
+                    }
+                } catch {
+                    self.connectionStatus = "Reconnecting…"
+                    try? await Task.sleep(for: .seconds(2))
+                }
+            }
+            self.connectionStatus = "Disconnected"
+        }
+    }
+
+    private func handleEvent(_ name: String, data: Data) async {
+        switch name {
+        case "ready":
+            connectionStatus = "Connected"
+            await refreshAll()
+            await refreshChatIfOpen()
+        case "chat.message":
+            if let message = try? JSONDecoder().decode(ChatMessage.self, from: data), !messages.contains(where: { $0.id == message.id }) {
+                if message.chatId == activeChat?.id { messages.append(message); try? await api.markRead(chatId: message.chatId ?? "") }
+            }
+            await refreshAll()
+        case "transfer.request":
+            if let transfer = try? JSONDecoder().decode(TransferRecord.self, from: data) {
+                incomingTransfer = transfer
+                if !transfers.contains(where: { $0.id == transfer.id }) { transfers.insert(transfer, at: 0) }
+            }
+        case "transfer.completed", "transfer.failed", "transfer.cancelled", "transfer.progress":
+            await refreshAll()
+        default:
+            if name.hasPrefix("friend.") || name.hasPrefix("device.") || name.hasPrefix("chat.") { await refreshAll() }
+        }
+    }
+
+    private func waitForTransfer(_ id: String, terminal: Set<String>) async throws -> TransferRecord {
+        let end = Date().addingTimeInterval(24 * 60 * 60)
+        while Date() < end {
+            try Task.checkCancellation()
+            let value = try await api.transfer(id)
+            if terminal.contains(value.status) { return value }
+            try await Task.sleep(for: .seconds(2))
+        }
+        throw APIClientError.transferExpired
+    }
+
+    private func replaceTransfer(_ transfer: TransferRecord) {
+        if let index = transfers.firstIndex(where: { $0.id == transfer.id }) { transfers[index] = transfer }
+        else { transfers.insert(transfer, at: 0) }
+    }
+}

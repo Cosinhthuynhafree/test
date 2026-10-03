@@ -1,0 +1,9 @@
+<Application x:Class="HoshinoTransfer.Windows.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             ShutdownMode="OnMainWindowClose">
+    <Application.Resources>
+        <SolidColorBrush x:Key="AccentBrush" Color="#8B7BFF" />
+        <SolidColorBrush x:Key="PanelBrush" Color="#171B26" />
+    </Application.Resources>
+</Application>

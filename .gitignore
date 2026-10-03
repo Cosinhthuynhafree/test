@@ -1,0 +1,33 @@
+# Never commit the local credential file
+/git-token.txt
+
+# Workspace-local assistant state
+/.workbuddy-ai/
+
+# Server data, uploads, secrets, and logs
+Server/HoshinoTransfer.Server/data/*
+!Server/HoshinoTransfer.Server/data/.gitkeep
+Server/HoshinoTransfer.Server/uploads/
+Server/HoshinoTransfer.Server/logs/
+.env
+.env.*
+!.env.example
+
+# .NET
+**/bin/
+**/obj/
+.vs/
+*.user
+*.suo
+
+# Xcode / Swift
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.ipa
+*.xcarchive/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
