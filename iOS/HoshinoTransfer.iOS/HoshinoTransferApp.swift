@@ -26,9 +26,9 @@ final class SessionStore: ObservableObject {
     @Published var incomingTransfer: TransferRecord?
     @Published private(set) var activeChat: ChatRecord?
     @Published private(set) var pairingCode: PairingCode?
-    @Published private(set) var serviceStatus = "Not checked"
+    @Published var serviceStatus = "Not checked"
     @Published private(set) var connectionStatus = "Disconnected"
-    @Published private(set) var errorMessage: String?
+    @Published var errorMessage: String?
     @Published private(set) var transferFraction = 0.0
     @Published private(set) var transferSpeed = 0.0
     @Published private(set) var transferEta: TimeInterval?
