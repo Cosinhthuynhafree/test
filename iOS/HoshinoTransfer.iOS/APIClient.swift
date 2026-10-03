@@ -175,7 +175,10 @@ final class APIClient {
         }
     }
 
-    func health() async throws -> HealthResponse { try await send("api/health", authenticated: false) }
+    func health() async throws -> HealthResponse {
+        let status: HealthResponse = try await send("api/health", authenticated: false)
+        return status
+    }
 
     func logout() async throws {
         defer { signOutLocal() }
@@ -195,8 +198,15 @@ final class APIClient {
         try await sendEmpty("api/v1/devices/\(deviceId)/heartbeat", method: "POST", body: Data("{}".utf8))
     }
 
-    func devices() async throws -> [DeviceRecord] { try await send("api/v1/devices").devices }
-    func createPairingCode() async throws -> PairingCode { try await send("api/v1/devices/pairing", method: "POST", body: Data("{}".utf8)) }
+    func devices() async throws -> [DeviceRecord] {
+        let envelope: DevicesResponse = try await send("api/v1/devices")
+        return envelope.devices
+    }
+
+    func createPairingCode() async throws -> PairingCode {
+        let code: PairingCode = try await send("api/v1/devices/pairing", method: "POST", body: Data("{}".utf8))
+        return code
+    }
 
     func pairDevice(code: String, name: String, platform: String) async throws -> DeviceRecord {
         let response: DeviceEnvelope = try await send("api/v1/devices/pair", method: "POST", body: JSONEncoder().encode(PairDeviceBody(pairingCode: code, deviceName: name, platform: platform)))
@@ -214,10 +224,14 @@ final class APIClient {
         guard var components = URLComponents(url: baseURL.appending(path: "api/v1/users/search"), resolvingAgainstBaseURL: false) else { throw APIClientError.invalidResponse }
         components.queryItems = [URLQueryItem(name: "q", value: query)]
         guard let url = components.url else { throw APIClientError.invalidResponse }
-        return try await sendURL(url).users
+        let envelope: UsersResponse = try await sendURL(url)
+        return envelope.users
     }
 
-    func friends() async throws -> [FriendRecord] { try await send("api/v1/friends").friends }
+    func friends() async throws -> [FriendRecord] {
+        let envelope: FriendsResponse = try await send("api/v1/friends")
+        return envelope.friends
+    }
 
     func requestFriend(username: String) async throws {
         try await sendEmpty("api/v1/friends/request", method: "POST", body: JSONEncoder().encode(RequestFriendBody(username: username)))
@@ -235,7 +249,10 @@ final class APIClient {
         try await sendEmpty(blocked ? "api/v1/friends/block" : "api/v1/friends/unblock", method: "POST", body: JSONEncoder().encode(FriendActionBody(userId: userId)))
     }
 
-    func chats() async throws -> [ChatRecord] { try await send("api/v1/chats").chats }
+    func chats() async throws -> [ChatRecord] {
+        let envelope: ChatsResponse = try await send("api/v1/chats")
+        return envelope.chats
+    }
 
     func openChat(userId: String) async throws -> ChatRecord {
         let body = JSONEncoder().encode(OpenChatBody(userId: userId))
@@ -243,7 +260,10 @@ final class APIClient {
         return envelope.chat
     }
 
-    func messages(chatId: String) async throws -> [ChatMessage] { try await send("api/v1/chats/\(chatId)/messages").messages }
+    func messages(chatId: String) async throws -> [ChatMessage] {
+        let envelope: MessagesResponse = try await send("api/v1/chats/\(chatId)/messages")
+        return envelope.messages
+    }
 
     func sendMessage(chatId: String, content: String, transferId: String? = nil) async throws -> ChatMessage {
         let body = JSONEncoder().encode(SendMessageBody(content: content, transferId: transferId))
@@ -259,23 +279,37 @@ final class APIClient {
         try await sendEmpty("api/v1/chats/\(chatId)/typing", method: "POST", body: JSONEncoder().encode(TypingBody(isTyping: isTyping)))
     }
 
-    func transfers() async throws -> [TransferRecord] { try await send("api/v1/transfers").transfers }
-
-    func createTransfer(receiverId: String, files: [URL]) async throws -> TransferCreateResponse {
-        let items = try files.map { url -> TransferItemRequest in
-            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-            let size = (attributes[.size] as? NSNumber)?.int64Value ?? 0
-            return TransferItemRequest(fileName: url.lastPathComponent, size: size, mimeType: mimeType(for: url), sha256: try hashFile(at: url))
-        }
-        let body = JSONEncoder().encode(CreateTransferBody(receiverId: receiverId, items: items))
-        return try await send("api/v1/transfers/create", method: "POST", body: body)
+    func transfers() async throws -> [TransferRecord] {
+        let envelope: TransfersResponse = try await send("api/v1/transfers")
+        return envelope.transfers
     }
 
-    func transfer(_ id: String) async throws -> TransferRecord { try await send("api/v1/transfers/\(id)").transfer }
-    func transferProgress(_ id: String) async throws -> TransferProgressResponse { try await send("api/v1/transfers/\(id)/progress") }
+    func createTransfer(receiverId: String, files: [URL]) async throws -> TransferCreateResponse {
+        var items: [TransferItemRequest] = []
+        for url in files {
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            let size = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+            let digest = try hashFile(at: url)
+            items.append(TransferItemRequest(fileName: url.lastPathComponent, size: size, mimeType: mimeType(for: url), sha256: digest))
+        }
+        let body = JSONEncoder().encode(CreateTransferBody(receiverId: receiverId, items: items))
+        let created: TransferCreateResponse = try await send("api/v1/transfers/create", method: "POST", body: body)
+        return created
+    }
+
+    func transfer(_ id: String) async throws -> TransferRecord {
+        let envelope: TransferEnvelope = try await send("api/v1/transfers/\(id)")
+        return envelope.transfer
+    }
+
+    func transferProgress(_ id: String) async throws -> TransferProgressResponse {
+        let progress: TransferProgressResponse = try await send("api/v1/transfers/\(id)/progress")
+        return progress
+    }
 
     func transferAction(_ id: String, action: String) async throws -> TransferRecord {
-        try await send("api/v1/transfers/\(id)/\(action)", method: "POST", body: Data("{}".utf8)).transfer
+        let envelope: TransferEnvelope = try await send("api/v1/transfers/\(id)/\(action)", method: "POST", body: Data("{}".utf8))
+        return envelope.transfer
     }
 
     func uploadAcceptedTransfer(_ transfer: TransferRecord, sourceURLs: [URL], onProgress: @MainActor (Double, Double, TimeInterval?) -> Void) async throws -> TransferRecord {
