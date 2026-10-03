@@ -116,6 +116,15 @@ struct TransferProgressResponse: Decodable {
     }
 }
 struct TransferItemRequest: Encodable { let fileName: String; let size: Int64; let mimeType: String; let sha256: String }
+struct OpenChatBody: Encodable { let userId: String }
+struct SendMessageBody: Encodable { let content: String; let transferId: String? }
+struct CreateTransferBody: Encodable { let receiverId: String; let items: [TransferItemRequest] }
+struct RegisterDeviceBody: Encodable { let deviceName: String; let platform: String }
+struct PairDeviceBody: Encodable { let pairingCode: String; let deviceName: String; let platform: String }
+struct RequestFriendBody: Encodable { let username: String }
+struct FriendActionBody: Encodable { let userId: String }
+struct TypingBody: Encodable { let isTyping: Bool }
+struct RefreshTokenBody: Encodable { let refreshToken: String }
 struct EmptyResponse: Decodable {}
 
 @MainActor
@@ -175,8 +184,7 @@ final class APIClient {
     }
 
     func registerDevice(name: String, platform: String) async throws -> DeviceRecord {
-        struct Body: Encodable { let deviceName: String; let platform: String }
-        let response: DeviceEnvelope = try await send("api/v1/devices", method: "POST", body: JSONEncoder().encode(Body(deviceName: name, platform: platform)))
+        let response: DeviceEnvelope = try await send("api/v1/devices", method: "POST", body: JSONEncoder().encode(RegisterDeviceBody(deviceName: name, platform: platform)))
         deviceId = response.device.id
         persistTokens()
         return response.device
@@ -191,8 +199,7 @@ final class APIClient {
     func createPairingCode() async throws -> PairingCode { try await send("api/v1/devices/pairing", method: "POST", body: Data("{}".utf8)) }
 
     func pairDevice(code: String, name: String, platform: String) async throws -> DeviceRecord {
-        struct Body: Encodable { let pairingCode: String; let deviceName: String; let platform: String }
-        let response: DeviceEnvelope = try await send("api/v1/devices/pair", method: "POST", body: JSONEncoder().encode(Body(pairingCode: code, deviceName: name, platform: platform)))
+        let response: DeviceEnvelope = try await send("api/v1/devices/pair", method: "POST", body: JSONEncoder().encode(PairDeviceBody(pairingCode: code, deviceName: name, platform: platform)))
         deviceId = response.device.id
         persistTokens()
         return response.device
@@ -213,13 +220,11 @@ final class APIClient {
     func friends() async throws -> [FriendRecord] { try await send("api/v1/friends").friends }
 
     func requestFriend(username: String) async throws {
-        struct Body: Encodable { let username: String }
-        let _: EmptyResponse = try await send("api/v1/friends/request", method: "POST", body: JSONEncoder().encode(Body(username: username)))
+        let _: EmptyResponse = try await send("api/v1/friends/request", method: "POST", body: JSONEncoder().encode(RequestFriendBody(username: username)))
     }
 
     func respondFriend(userId: String, accept: Bool) async throws {
-        struct Body: Encodable { let userId: String }
-        let _: EmptyResponse = try await send("api/v1/friends/\(accept ? "accept" : "reject")", method: "POST", body: JSONEncoder().encode(Body(userId: userId)))
+        let _: EmptyResponse = try await send("api/v1/friends/\(accept ? "accept" : "reject")", method: "POST", body: JSONEncoder().encode(FriendActionBody(userId: userId)))
     }
 
     func removeFriend(_ userId: String) async throws {
@@ -227,22 +232,23 @@ final class APIClient {
     }
 
     func setBlocked(_ userId: String, blocked: Bool) async throws {
-        struct Body: Encodable { let userId: String }
-        let _: EmptyResponse = try await send(blocked ? "api/v1/friends/block" : "api/v1/friends/unblock", method: "POST", body: JSONEncoder().encode(Body(userId: userId)))
+        let _: EmptyResponse = try await send(blocked ? "api/v1/friends/block" : "api/v1/friends/unblock", method: "POST", body: JSONEncoder().encode(FriendActionBody(userId: userId)))
     }
 
     func chats() async throws -> [ChatRecord] { try await send("api/v1/chats").chats }
 
     func openChat(userId: String) async throws -> ChatRecord {
-        struct Body: Encodable { let userId: String }
-        return try await send("api/v1/chats", method: "POST", body: JSONEncoder().encode(Body(userId: userId))).chat
+        let body = JSONEncoder().encode(OpenChatBody(userId: userId))
+        let envelope: ChatEnvelope = try await send("api/v1/chats", method: "POST", body: body)
+        return envelope.chat
     }
 
     func messages(chatId: String) async throws -> [ChatMessage] { try await send("api/v1/chats/\(chatId)/messages").messages }
 
     func sendMessage(chatId: String, content: String, transferId: String? = nil) async throws -> ChatMessage {
-        struct Body: Encodable { let content: String; let transferId: String? }
-        return try await send("api/v1/chats/\(chatId)/messages", method: "POST", body: JSONEncoder().encode(Body(content: content, transferId: transferId))).message
+        let body = JSONEncoder().encode(SendMessageBody(content: content, transferId: transferId))
+        let envelope: MessageEnvelope = try await send("api/v1/chats/\(chatId)/messages", method: "POST", body: body)
+        return envelope.message
     }
 
     func markRead(chatId: String) async throws {
@@ -250,8 +256,7 @@ final class APIClient {
     }
 
     func sendTyping(chatId: String, isTyping: Bool) async throws {
-        struct Body: Encodable { let isTyping: Bool }
-        let _: EmptyResponse = try await send("api/v1/chats/\(chatId)/typing", method: "POST", body: JSONEncoder().encode(Body(isTyping: isTyping)))
+        let _: EmptyResponse = try await send("api/v1/chats/\(chatId)/typing", method: "POST", body: JSONEncoder().encode(TypingBody(isTyping: isTyping)))
     }
 
     func transfers() async throws -> [TransferRecord] { try await send("api/v1/transfers").transfers }
@@ -262,8 +267,8 @@ final class APIClient {
             let size = (attributes[.size] as? NSNumber)?.int64Value ?? 0
             return TransferItemRequest(fileName: url.lastPathComponent, size: size, mimeType: mimeType(for: url), sha256: try hashFile(at: url))
         }
-        struct Body: Encodable { let receiverId: String; let items: [TransferItemRequest] }
-        return try await send("api/v1/transfers/create", method: "POST", body: JSONEncoder().encode(Body(receiverId: receiverId, items: items)))
+        let body = JSONEncoder().encode(CreateTransferBody(receiverId: receiverId, items: items))
+        return try await send("api/v1/transfers/create", method: "POST", body: body)
     }
 
     func transfer(_ id: String) async throws -> TransferRecord { try await send("api/v1/transfers/\(id)").transfer }
@@ -434,13 +439,12 @@ final class APIClient {
     }
 
     private func refresh() async throws {
-        if let task = refreshTask { try await task.value; return }
-        let task = Task { @MainActor in
-            guard let refreshToken else { throw APIClientError.unauthorized }
-            struct Body: Encodable { let refreshToken: String }
-            let body = try JSONEncoder().encode(Body(refreshToken: refreshToken))
-            let response: SessionResponse = try await send("api/v1/auth/refresh", method: "POST", body: body, authenticated: false)
-            apply(response.session)
+        if let refreshTask { try await refreshTask.value; return }
+        let task = Task { [weak self] in
+            guard let self, let refreshToken = self.refreshToken else { throw APIClientError.unauthorized }
+            let body = try JSONEncoder().encode(RefreshTokenBody(refreshToken: refreshToken))
+            let response: SessionResponse = try await self.send("api/v1/auth/refresh", method: "POST", body: body, authenticated: false)
+            await MainActor.run { self.apply(response.session) }
         }
         refreshTask = task
         defer { refreshTask = nil }
