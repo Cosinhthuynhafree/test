@@ -1,10 +1,10 @@
 'use strict';
 // End-to-end acceptance against the production public funnel URL.
 // Registers two throwaway accounts, friends them, relays a real file, verifies SHA-256.
-const crypto = require('node:crypto');
-const fs = require('node:fs');
-const path = require('node:path');
-const os = require('node:os');
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 
 const BASE = process.env.HOSHINO_BASE_URL || 'https://rt2ucj.taild7fb6f.ts.net';
 const stamp = Date.now().toString(36);
