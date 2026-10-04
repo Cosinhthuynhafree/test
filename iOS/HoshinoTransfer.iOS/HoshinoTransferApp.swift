@@ -218,8 +218,9 @@ final class SessionStore: ObservableObject {
                 guard sock >= 0 else { throw APIClientError.invalidResponse }
                 p2pSock = sock
                 guard let publicMapping = P2PChannel.stunBinding(sock: sock) else { throw APIClientError.invalidResponse }
+                let p2pLanIp = LanTransferServer.localIPv4() ?? "127.0.0.1"
                 let lanPort = P2PChannel.localPort(sock: sock)
-                try await api.registerCandidates(transferId: created.transfer.id, host: publicMapping.host, port: publicMapping.port, lanHost: lanIp, lanPort: lanPort)
+                try await api.registerCandidates(transferId: created.transfer.id, host: publicMapping.host, port: publicMapping.port, lanHost: p2pLanIp, lanPort: lanPort)
                 let flag = P2PChannel.StopFlag()
                 p2pStop = flag
                 let payloads = zip(created.transfer.items, urls).map { pair in

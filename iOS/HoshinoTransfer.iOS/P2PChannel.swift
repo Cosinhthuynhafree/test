@@ -11,6 +11,10 @@ enum P2PChannel {
     struct Endpoint: Equatable {
         var ip: UInt32
         var port: UInt16
+
+        var host: String {
+            String(format: "%u.%u.%u.%u", (ip >> 24) & 0xFF, (ip >> 16) & 0xFF, (ip >> 8) & 0xFF, ip & 0xFF)
+        }
     }
 
     struct ItemPayload {
@@ -226,8 +230,8 @@ enum P2PChannel {
     }
 
     /// Sender side: answer segment requests with file slices.
-    static func serve(sock: Int32, peer: Endpoint, payloads: [ItemPayload], cancel: @escaping () -> Bool) {
-        while !cancel() {
+    static func serve(sock: Int32, peer: Endpoint, payloads: [ItemPayload], shouldStop: @escaping () -> Bool) {
+        while !shouldStop() {
             guard let received = receiveFrom(sock), received.from == peer, received.data.count >= 9,
                   received.data.first == req else { continue }
             let itemIndex = readInt(received.data, 1)
