@@ -399,10 +399,16 @@ async function route(req, res, pathname, searchParams) {
     const platform = body.platform;
     if (!name || name.length > 80) fail(400, 'Device name must be 1–80 characters.', 'invalid_device_name');
     if (!['Windows', 'iOS', 'Other'].includes(platform)) fail(400, 'Platform must be Windows, iOS, or Other.', 'invalid_platform');
-    const id = crypto.randomUUID();
     const now = Date.now();
+    const existing = db.get('SELECT id,device_name,platform,last_seen,created_at FROM devices WHERE user_id=? AND device_name=? AND platform=? ORDER BY last_seen DESC LIMIT 1', [user.user_id, name, platform]);
+    if (existing) {
+      db.run('UPDATE devices SET last_seen=? WHERE id=?', [now, existing.id]);
+      const online = eventDeviceClients.has(existing.id);
+      return sendJson(res, 200, { device: { id: existing.id, deviceName: existing.device_name, platform: existing.platform, lastSeen: iso(now), createdAt: iso(existing.created_at), status: online ? 'Online' : 'Offline' }, reused: true });
+    }
+    const id = crypto.randomUUID();
     db.run('INSERT INTO devices(id,user_id,device_name,platform,last_seen,created_at) VALUES(?,?,?,?,?,?)', [id, user.user_id, name, platform, now, now]);
-    return sendJson(res, 201, { device: { id, deviceName: name, platform, lastSeen: iso(now), createdAt: iso(now), status: 'Offline' } });
+    return sendJson(res, 201, { device: { id, deviceName: name, platform, lastSeen: iso(now), createdAt: iso(now), status: 'Offline' }, reused: false });
   }
 
   if (req.method === 'POST' && pathname === `${API}/devices/pairing`) {
