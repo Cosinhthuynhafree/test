@@ -92,9 +92,10 @@ enum P2PChannel {
         var buffer = [UInt8](repeating: 0, count: 65536)
         var from = sockaddr_in()
         var fromLength = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let bufferCapacity = buffer.count
         let received = withUnsafeMutablePointer(to: &buffer) { bufferPointer in
             withUnsafeMutablePointer(to: &from) { fromPointer in
-                recvfrom(sock, bufferPointer, buffer.count, 0, sockaddr_cast(fromPointer), &fromLength)
+                recvfrom(sock, bufferPointer, bufferCapacity, 0, sockaddr_cast(fromPointer), &fromLength)
             }
         }
         guard received > 0 else { return nil }
