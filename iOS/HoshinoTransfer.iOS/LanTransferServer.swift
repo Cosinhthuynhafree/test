@@ -7,15 +7,15 @@ final class LanTransferServer {
     static let defaultPort: UInt16 = 52317
 
     private let listener: NWListener
-    private let token: String
+    private let capabilityToken: String
     private var items: [String: (path: String, size: Int64)] = [:]
     private let queue = DispatchQueue(label: "hoshino.lan.server")
     private(set) var port: UInt16 = 0
 
-    var token: String { token }
+    var token: String { capabilityToken }
 
     init(token: String) throws {
-        self.token = token
+        self.capabilityToken = token
         let parameters = NWParameters.tcp
         let listener = try NWListener(using: parameters, on: NWEndpoint.Port(rawValue: Self.defaultPort)!)
         self.listener = listener
