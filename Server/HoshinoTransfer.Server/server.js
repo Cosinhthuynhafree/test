@@ -159,6 +159,13 @@ function transferRecord(transferId, userId) {
   const transfer = db.get('SELECT * FROM transfers WHERE id=? AND (sender_id=? OR receiver_id=?)', [transferId, userId, userId]);
   if (!transfer) fail(404, 'Transfer not found.', 'not_found');
   const items = db.all('SELECT i.*,COALESCE((SELECT SUM(c.size) FROM transfer_chunks c WHERE c.item_id=i.id),0) AS received_bytes FROM transfer_items i WHERE i.transfer_id=? ORDER BY i.created_at', [transferId]);
+  let peerCandidates = [];
+  if (transfer.candidates) {
+    try {
+      const registered = JSON.parse(transfer.candidates);
+      peerCandidates = Array.isArray(registered) ? registered.filter((entry) => entry.userId !== userId).map((entry) => ({ host: entry.host, port: entry.port, lanHost: entry.lanHost, lanPort: entry.lanPort })) : [];
+    } catch { peerCandidates = []; }
+  }
   let directInfo = null;
   if (transfer.direct_info) {
     try {
@@ -170,7 +177,7 @@ function transferRecord(transferId, userId) {
   return {
     id: transfer.id, senderId: transfer.sender_id, receiverId: transfer.receiver_id, status: transfer.status,
     transport: transfer.transport, expiresAt: iso(transfer.expires_at), createdAt: iso(transfer.created_at), chunkSize: CHUNK_SIZE,
-    directInfo, relayRequested: Boolean(transfer.relay_requested),
+    directInfo, relayRequested: Boolean(transfer.relay_requested), peerCandidates,
     items: items.map((item) => {
       const nextChunkIndex = db.get('SELECT COUNT(*) AS count FROM transfer_chunks WHERE item_id=?', [item.id]).count;
       return { id: item.id, fileName: item.file_name, size: item.size, mimeType: item.mime_type, sha256: item.sha256,
@@ -683,6 +690,48 @@ async function route(req, res, pathname, searchParams) {
     db.run('UPDATE transfers SET direct_info=?,updated_at=? WHERE id=?', [JSON.stringify({ host, port, token }), Date.now(), transfer.id]);
     emit(transfer.receiver_id, 'transfer.direct', { transferId: transfer.id, host, port });
     return sendJson(res, 200, { status: 'registered' });
+  }
+
+  match = new RegExp(`^${API}/transfers/([0-9a-f-]{36})/candidates$`).exec(pathname);
+  if (req.method === 'POST' && match) {
+    const transfer = ownedTransfer(match[1], user.user_id);
+    if (transfer.status !== 'Transferring') fail(409, 'Candidates are exchanged after the receiver accepts.', 'invalid_transfer_state');
+    const body = await readJson(req);
+    const list = Array.isArray(body.candidates) ? body.candidates.slice(0, 6) : [];
+    const clean = [];
+    for (const entry of list) {
+      const host = typeof entry?.host === 'string' ? entry.host.trim() : '';
+      const lanHost = typeof entry?.lanHost === 'string' ? entry.lanHost.trim() : '';
+      const port = Number(entry?.port);
+      const lanPort = Number(entry?.lanPort);
+      if (host && host.length <= 45 && /^[0-9a-fA-F.:]+$/.test(host) && Number.isInteger(port) && port > 0 && port < 65536
+          && Number.isInteger(lanPort) && lanPort > 0 && lanPort < 65536) {
+        clean.push({ userId: user.user_id, host, port, lanHost: lanHost && lanHost.length <= 45 ? lanHost : host, lanPort });
+      }
+    }
+    if (!clean.length) fail(400, 'At least one valid UDP candidate is required.', 'invalid_candidates');
+    let existing = [];
+    try { existing = JSON.parse(transfer.candidates || '[]'); } catch { existing = []; }
+    const others = existing.filter((entry) => entry.userId !== user.user_id);
+    db.run('UPDATE transfers SET candidates=?,updated_at=? WHERE id=?', [JSON.stringify([...others, ...clean]), Date.now(), transfer.id]);
+    const peerId = transfer.sender_id === user.user_id ? transfer.receiver_id : transfer.sender_id;
+    emit(peerId, 'transfer.candidates', { transferId: transfer.id, candidates: clean.map((entry) => ({ host: entry.host, port: entry.port, lanHost: entry.lanHost, lanPort: entry.lanPort })) });
+    return sendJson(res, 200, { status: 'registered', count: clean.length });
+  }
+
+  match = new RegExp(`^${API}/transfers/([0-9a-f-]{36})/p2p-complete$`).exec(pathname);
+  if (req.method === 'POST' && match) {
+    const transfer = ownedTransfer(match[1], user.user_id);
+    if (transfer.receiver_id !== user.user_id || transfer.status !== 'Transferring') fail(409, 'Only the receiver may complete a peer-to-peer transfer.', 'invalid_transfer_state');
+    if (!transfer.candidates) fail(409, 'No peer candidates were registered for this transfer.', 'no_p2p_channel');
+    db.transaction(() => {
+      db.run("UPDATE transfer_items SET status='Completed' WHERE transfer_id=?", [transfer.id]);
+      db.run("UPDATE transfers SET status='Completed',transport='P2P (UDP)',updated_at=? WHERE id=?", [Date.now(), transfer.id]);
+    });
+    db.run('DELETE FROM transfer_chunks WHERE transfer_id=?', [transfer.id]);
+    removeTransferFiles(transfer.id);
+    emit(transfer.sender_id, 'transfer.completed', { transferId: transfer.id, transport: 'P2P (UDP)' });
+    return sendJson(res, 200, { transfer: transferRecord(transfer.id, user.user_id) });
   }
 
   match = new RegExp(`^${API}/transfers/([0-9a-f-]{36})/fallback-relay$`).exec(pathname);

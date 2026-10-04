@@ -12,7 +12,7 @@ namespace HoshinoTransfer.Windows.Services;
 public sealed class ApiClient : IDisposable
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromMinutes(10) };
+    private HttpClient? _http = CreateHttpClient();
     private readonly ICredentialVault _vault;
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
     private DateTimeOffset _accessExpiresAt;
@@ -35,15 +35,32 @@ public sealed class ApiClient : IDisposable
         _http.BaseAddress = BaseAddress;
     }
 
+    private static HttpClient CreateHttpClient() => new() { Timeout = TimeSpan.FromMinutes(10) };
+
+    /// <summary>
+    /// Recreates the HttpClient if a racing shutdown disposed it, so in-flight
+    /// startup work can complete harmlessly instead of crashing.
+    /// </summary>
+    private HttpClient Http
+    {
+        get
+        {
+            if (_http is not null) return _http;
+            _http = CreateHttpClient();
+            _http.BaseAddress = BaseAddress;
+            return _http;
+        }
+    }
+
     public async Task<AuthResult> LoginAsync(string username, string password, CancellationToken cancellationToken = default)
     {
-        using var response = await _http.PostAsJsonAsync("api/v1/auth/login", new { username, password }, JsonOptions, cancellationToken);
+        using var response = await Http.PostAsJsonAsync("api/v1/auth/login", new { username, password }, JsonOptions, cancellationToken);
         return await ReadAuthAsync(response, cancellationToken);
     }
 
     public async Task<AuthResult> RegisterAsync(string username, string displayName, string password, CancellationToken cancellationToken = default)
     {
-        using var response = await _http.PostAsJsonAsync("api/v1/auth/register", new { username, displayName, password }, JsonOptions, cancellationToken);
+        using var response = await Http.PostAsJsonAsync("api/v1/auth/register", new { username, displayName, password }, JsonOptions, cancellationToken);
         return await ReadAuthAsync(response, cancellationToken);
     }
 
@@ -55,7 +72,7 @@ public sealed class ApiClient : IDisposable
         try
         {
             if (!string.Equals(usedRefreshToken, RefreshToken, StringComparison.Ordinal)) return;
-            using var response = await _http.PostAsJsonAsync("api/v1/auth/refresh", new { refreshToken = usedRefreshToken }, JsonOptions, cancellationToken);
+            using var response = await Http.PostAsJsonAsync("api/v1/auth/refresh", new { refreshToken = usedRefreshToken }, JsonOptions, cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
                 ClearSession();
@@ -132,14 +149,14 @@ public sealed class ApiClient : IDisposable
 
     public async Task<bool> CheckHealthAsync(CancellationToken cancellationToken = default)
     {
-        using var response = await _http.GetAsync("api/health", cancellationToken);
+        using var response = await Http.GetAsync("api/health", cancellationToken);
         return response.IsSuccessStatusCode;
     }
 
     public async Task<bool> PrivateApiIsProtectedAsync(CancellationToken cancellationToken = default)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, "api/v1/users/me");
-        using var response = await _http.SendAsync(request, cancellationToken);
+        using var response = await Http.SendAsync(request, cancellationToken);
         return response.StatusCode == HttpStatusCode.Unauthorized;
     }
 
@@ -260,6 +277,12 @@ public sealed class ApiClient : IDisposable
     public async Task RequestRelayFallbackAsync(string transferId, CancellationToken ct = default)
         => _ = await SendJsonAsync<object, JsonElement>(HttpMethod.Post, $"api/v1/transfers/{Uri.EscapeDataString(transferId)}/fallback-relay", new { }, ct);
 
+    public async Task RegisterCandidatesAsync(string transferId, string host, int port, string lanHost, int lanPort, CancellationToken ct = default)
+        => _ = await SendJsonAsync<object, JsonElement>(HttpMethod.Post, $"api/v1/transfers/{Uri.EscapeDataString(transferId)}/candidates", new { candidates = new[] { new { host, port, lanHost, lanPort } } }, ct);
+
+    public async Task<TransferDto> CompleteP2PTransferAsync(string transferId, CancellationToken ct = default)
+        => (await SendJsonAsync<object, TransferEnvelope>(HttpMethod.Post, $"api/v1/transfers/{Uri.EscapeDataString(transferId)}/p2p-complete", new { }, ct)).Transfer;
+
     public async Task<TransferDto> CompleteDirectTransferAsync(string transferId, CancellationToken ct = default)
         => (await SendJsonAsync<object, TransferEnvelope>(HttpMethod.Post, $"api/v1/transfers/{Uri.EscapeDataString(transferId)}/complete-direct", new { }, ct)).Transfer;
 
@@ -281,7 +304,7 @@ public sealed class ApiClient : IDisposable
         body.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
         body.Headers.ContentLength = length;
         request.Content = body;
-        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         if (response.StatusCode == HttpStatusCode.Unauthorized && !string.IsNullOrWhiteSpace(RefreshToken))
         {
             await RefreshSessionAsync(ct);
@@ -297,7 +320,7 @@ public sealed class ApiClient : IDisposable
         for (var attempt = 0; ; attempt++)
         {
             using var request = Authorized(HttpMethod.Get, $"api/v1/transfers/{Uri.EscapeDataString(transferId)}/items/{Uri.EscapeDataString(item.Id)}/download");
-            response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+            response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
             if (response.StatusCode != HttpStatusCode.Unauthorized || attempt > 0 || string.IsNullOrWhiteSpace(RefreshToken)) break;
             response.Dispose();
             await RefreshSessionAsync(ct);
@@ -328,7 +351,7 @@ public sealed class ApiClient : IDisposable
             {
                 await EnsureFreshSessionAsync(ct);
                 using var request = Authorized(HttpMethod.Get, "api/v1/events");
-                using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+                using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
                 if (response.StatusCode == HttpStatusCode.Unauthorized)
                 {
                     await RefreshSessionAsync(ct);
@@ -384,14 +407,14 @@ public sealed class ApiClient : IDisposable
     {
         var request = Authorized(method, route);
         if (body is not null) request.Content = JsonContent.Create(body, options: JsonOptions);
-        var response = await _http.SendAsync(request, ct);
+        var response = await Http.SendAsync(request, ct);
         request.Dispose();
         if (response.StatusCode != HttpStatusCode.Unauthorized || string.IsNullOrWhiteSpace(RefreshToken)) return response;
         response.Dispose();
         await RefreshSessionAsync(ct);
         var retry = Authorized(method, route);
         if (body is not null) retry.Content = JsonContent.Create(body, options: JsonOptions);
-        try { return await _http.SendAsync(retry, ct); }
+        try { return await Http.SendAsync(retry, ct); }
         finally { retry.Dispose(); }
     }
 
@@ -427,8 +450,11 @@ public sealed class ApiClient : IDisposable
 
     public void Dispose()
     {
+        _http.CancelPendingRequests();
         _refreshGate.Dispose();
-        _http.Dispose();
+        var client = _http;
+        _http = null;
+        client.Dispose();
     }
 }
 

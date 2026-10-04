@@ -30,11 +30,15 @@ public sealed class UnavailableTransferTransport(TransferMode mode, string reaso
         => Task.FromException(new NotSupportedException($"{Mode} is unavailable: {AvailabilityReason}"));
 }
 
-public sealed class ServerRelayTransport(ApiClient api) : ITransferTransport
+public sealed class ServerRelayTransport : ITransferTransport
 {
+    private readonly ApiClient _api;
+    /// <summary>1.0 = unthrottled; 0.7 = capped at 70 percent of the natural speed.</summary>
+    public double SpeedFactor { get; set; } = 1.0;
     public TransferMode Mode => TransferMode.ServerRelay;
     public bool IsAvailable => true;
     public string AvailabilityReason => "Authenticated HTTPS chunk relay is available.";
+    public ServerRelayTransport(ApiClient api) { _api = api; }
 
     public async Task UploadItemAsync(string transferId, TransferSource source, int chunkSize, IProgress<TransferProgress>? progress, CancellationToken cancellationToken)
     {
@@ -46,7 +50,7 @@ public sealed class ServerRelayTransport(ApiClient api) : ITransferTransport
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var state = await api.GetTransferProgressAsync(transferId, cancellationToken);
+            var state = await _api.GetTransferProgressAsync(transferId, cancellationToken);
             if (state.Status == "Cancelled" || state.Status == "Failed") throw new InvalidOperationException($"Transfer is {state.Status}.");
             if (state.Status == "Paused")
             {
@@ -80,7 +84,14 @@ public sealed class ServerRelayTransport(ApiClient api) : ITransferTransport
                 try
                 {
                     await using var chunk = new MemoryStream(buffer, 0, count, writable: false, publiclyVisible: true);
-                    await api.UploadChunkAsync(transferId, source.ItemId, index, chunk, count, cancellationToken);
+                    var chunkStopwatch = System.Diagnostics.Stopwatch.StartNew();
+                    await _api.UploadChunkAsync(transferId, source.ItemId, index, chunk, count, cancellationToken);
+                    chunkStopwatch.Stop();
+                    if (SpeedFactor < 1.0)
+                    {
+                        var throttleDelay = TimeSpan.FromSeconds(chunkStopwatch.Elapsed.TotalSeconds * (1.0 / SpeedFactor - 1.0));
+                        if (throttleDelay > TimeSpan.Zero) await Task.Delay(throttleDelay, cancellationToken);
+                    }
                     newlySent += count;
                     sentSinceSnapshot += count;
                     backoff = 1;
@@ -114,7 +125,7 @@ public sealed class ServerRelayTransport(ApiClient api) : ITransferTransport
 
             if (!hadFailure)
             {
-                var latest = await api.GetTransferProgressAsync(transferId, cancellationToken);
+                var latest = await _api.GetTransferProgressAsync(transferId, cancellationToken);
                 var latestItem = latest.Items.First(item => item.ItemId == source.ItemId);
                 if (latestItem.ReceivedBytes >= source.Size) return;
             }
@@ -125,19 +136,25 @@ public sealed class ServerRelayTransport(ApiClient api) : ITransferTransport
     }
 
     public Task DownloadItemAsync(string transferId, TransferItemDto item, string destinationPath, CancellationToken cancellationToken)
-        => api.DownloadItemAsync(transferId, item, destinationPath, cancellationToken);
+        => _api.DownloadItemAsync(transferId, item, destinationPath, cancellationToken);
 }
 
 public sealed class TransferTransportRegistry
 {
     private readonly IReadOnlyList<ITransferTransport> _transports;
+    public ServerRelayTransport Relay { get; }
+    public DirectWifiTransport Direct { get; }
+
+    public P2PTransport P2P { get; }
     public TransferTransportRegistry(ApiClient api)
     {
-        var relay = new ServerRelayTransport(api);
+        Relay = new ServerRelayTransport(api);
+        Direct = new DirectWifiTransport(api, Relay);
+        P2P = new P2PTransport(api, Relay);
         _transports = [
-            new UnavailableTransferTransport(TransferMode.P2P, "Cross-network P2P needs a signaling/TURN service that is not configured."),
-            new DirectWifiTransport(api, relay),
-            relay,
+            P2P,
+            Direct,
+            Relay,
             new UnavailableTransferTransport(TransferMode.Lightning, "Apple requires the MFi External Accessory entitlement; it is not available to unsigned sideloads."),
         ];
     }
@@ -145,9 +162,27 @@ public sealed class TransferTransportRegistry
     public IReadOnlyList<ITransferTransport> All => _transports;
     public ITransferTransport SelectAutomatic() => _transports.First(transport => transport.IsAvailable && transport.Mode is TransferMode.P2P or TransferMode.DirectWifi or TransferMode.ServerRelay);
     public ITransferTransport Get(TransferMode mode) => _transports.First(transport => transport.Mode == mode);
+
+    /// <summary>Resolves the user's preferred transport and applies the public-server speed cap.</summary>
+    public ITransferTransport SelectPreferred(TransferPreference preference)
+    {
+        switch (preference)
+        {
+            case TransferPreference.DirectWifi:
+                if (Direct.IsAvailable) return Direct;
+                break;
+            case TransferPreference.P2P:
+                if (P2P.IsAvailable) return P2P;
+                break;
+            case TransferPreference.ServerApi:
+                Relay.SpeedFactor = 0.7;
+                return Relay;
+        }
+        return SelectAutomatic();
+    }
 }
 
-public sealed class TransferManager(ApiClient api, TransferTransportRegistry transports)
+public sealed class TransferManager(ApiClient api, TransferTransportRegistry transports, Func<TransferPreference>? preferenceAccessor = null)
 {
     public async Task<TransferCreateEnvelope> PrepareAsync(string receiverId, IReadOnlyList<string> paths, CancellationToken cancellationToken)
     {
@@ -210,7 +245,24 @@ public sealed class TransferManager(ApiClient api, TransferTransportRegistry tra
             sources.Add(new TransferSource(transfer.Items[index].Id, transfer.Items[index].FileName, info.FullName, info.Length));
         }
 
-        if (transports.SelectAutomatic() is DirectWifiTransport direct)
+        var preference = preferenceAccessor?.Invoke() ?? TransferPreference.Auto;
+        if (preference == TransferPreference.ServerApi)
+        {
+            transports.Relay.SpeedFactor = 0.7;
+        }
+        else if (preference is TransferPreference.Auto or TransferPreference.P2P && transports.P2P.IsAvailable)
+        {
+            try
+            {
+                var done = await transports.P2P.UploadAcceptedAsync(transfer, sources, progress, cancellationToken);
+                if (done.Status == "Completed" && done.Transport == P2PTransport.TransportName) return done;
+            }
+            catch (Exception ex) when (ex is IOException or InvalidOperationException or HttpRequestException or TimeoutException && !cancellationToken.IsCancellationRequested)
+            {
+                // punch failed or the peer asked for the relay: continue below
+            }
+        }
+        if (preference is TransferPreference.Auto or TransferPreference.DirectWifi && transports.SelectPreferred(preference is TransferPreference.P2P ? TransferPreference.Auto : preference) is DirectWifiTransport direct)
         {
             try
             {
@@ -260,8 +312,34 @@ public sealed class TransferManager(ApiClient api, TransferTransportRegistry tra
             var direct = (DirectWifiTransport)transports.Get(TransferMode.DirectWifi);
             return await direct.ReceiveAllAsync(transfer, destinationDirectory, progress, cancellationToken);
         }
-        await DownloadCoreAsync(transfer, destinationDirectory, cancellationToken);
-        return transfer.Items.Select(item => Path.Combine(destinationDirectory, item.FileName)).ToList();
+        // No direct channel: ask the sender to finish over the relay, then download.
+        await api.RequestRelayFallbackAsync(transfer.Id, cancellationToken);
+        var completed = await WaitForTerminalAsync(transfer.Id, cancellationToken);
+        if (completed.Status != "Completed") throw new InvalidOperationException($"Relay fallback ended with status {completed.Status}.");
+        var relay = transports.Get(TransferMode.ServerRelay);
+        var saved = new List<string>(completed.Items.Count);
+        foreach (var item in completed.Items)
+        {
+            var name = Path.GetFileName(item.FileName);
+            if (string.IsNullOrWhiteSpace(name)) name = "received-file";
+            var destination = Path.Combine(destinationDirectory, $"{DateTime.Now:yyyyMMdd-HHmmss-fff}-{name}");
+            await relay.DownloadItemAsync(transfer.Id, item, destination, cancellationToken);
+            saved.Add(destination);
+        }
+        return saved;
+    }
+
+    private async Task<TransferDto> WaitForTerminalAsync(string transferId, CancellationToken cancellationToken)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddHours(24);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var current = await api.GetTransferAsync(transferId, cancellationToken);
+            if (current.Status is "Completed" or "Failed" or "Cancelled") return current;
+            await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+        }
+        throw new TimeoutException("Relay fallback transfer did not finish in time.");
     }
 
     public Task DownloadAsync(TransferDto transfer, string destinationDirectory, CancellationToken cancellationToken)

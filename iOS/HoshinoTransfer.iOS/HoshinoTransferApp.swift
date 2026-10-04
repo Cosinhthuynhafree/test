@@ -197,8 +197,10 @@ final class SessionStore: ObservableObject {
             let accepted = try await waitForTransfer(created.transfer.id, terminal: ["Transferring", "Cancelled", "Failed"])
             guard accepted.status == "Transferring" else { throw APIClientError.transferState(accepted.status) }
 
-            // Direct Wi-Fi attempt: serve chunks on the LAN and let the receiver pull them.
+            // Channel setup: LAN HTTP server (Direct Wi-Fi) + P2P candidates for hole punching.
             var lanServer: LanTransferServer?
+            var p2pStop: P2PChannel.StopFlag?
+            var p2pSock: Int32 = -1
             if let lanIp = LanTransferServer.localIPv4() {
                 do {
                     let token = LanTransferServer.generateToken()
@@ -211,19 +213,41 @@ final class SessionStore: ObservableObject {
                     lanServer = server
                 } catch { lanServer = nil }
             }
+            do {
+                let sock = P2PChannel.openSocket()
+                guard sock >= 0 else { throw APIClientError.invalidResponse }
+                p2pSock = sock
+                guard let publicMapping = P2PChannel.stunBinding(sock: sock) else { throw APIClientError.invalidResponse }
+                let lanPort = P2PChannel.localPort(sock: sock)
+                try await api.registerCandidates(transferId: created.transfer.id, host: publicMapping.host, port: publicMapping.port, lanHost: lanIp, lanPort: lanPort)
+                let flag = P2PChannel.StopFlag()
+                p2pStop = flag
+                let payloads = zip(created.transfer.items, urls).map { pair in
+                    P2PChannel.ItemPayload(id: pair.0.id, fileName: pair.0.fileName, size: pair.0.size, sha256: pair.0.sha256, localPath: pair.1.path)
+                }
+                let stopFlag = flag
+                let transferURL = api.baseURL.appending(path: "api/v1/transfers/\(created.transfer.id)")
+                let accessToken = api.accessToken ?? ""
+                DispatchQueue.global(qos: .utility).async {
+                    guard let peer = P2PChannel.establish(sock: sock, candidatesProvider: {
+                        P2PChannel.fetchPeerCandidates(transferURL: transferURL, token: accessToken)
+                    }, shouldStop: { stopFlag.isSet }) else { return }
+                    P2PChannel.serve(sock: sock, peer: peer, payloads: payloads, shouldStop: { stopFlag.isSet })
+                }
+            } catch { }
 
             var terminal: TransferRecord?
-            if lanServer != nil {
-                let deadline = Date().addingTimeInterval(15 * 60)
-                while Date() < deadline {
-                    try Task.checkCancellation()
-                    let current = try await api.transfer(created.transfer.id)
-                    if ["Completed", "Failed", "Cancelled"].contains(current.status) { terminal = current; break }
-                    if current.relayRequested == true { break }
-                    try await Task.sleep(for: .seconds(2))
-                }
-                lanServer?.stop()
+            let deadline = Date().addingTimeInterval(15 * 60)
+            while Date() < deadline {
+                try Task.checkCancellation()
+                let current = try await api.transfer(created.transfer.id)
+                if ["Completed", "Failed", "Cancelled"].contains(current.status) { terminal = current; break }
+                if current.relayRequested == true { break }
+                try await Task.sleep(for: .seconds(2))
             }
+            p2pStop?.set()
+            lanServer?.stop()
+            if p2pSock >= 0 { P2PChannel.closeSocket(p2pSock) }
 
             if let directFinal = terminal, directFinal.status == "Completed" {
                 replaceTransfer(directFinal)
@@ -251,20 +275,32 @@ final class SessionStore: ObservableObject {
             let active = try await waitForTransfer(transfer.id, terminal: ["Transferring", "Failed", "Cancelled"])
             guard active.status == "Transferring" else { throw APIClientError.transferState(active.status) }
 
-            // Wait briefly for the sender to register its LAN endpoint.
+            // Wait briefly for the sender to announce its channels.
             var current = active
             var deadline = Date().addingTimeInterval(20)
-            while current.directInfo == nil && Date() < deadline {
+            while current.directInfo == nil && (current.peerCandidates?.isEmpty ?? true) && Date() < deadline {
                 try await Task.sleep(for: .seconds(2))
                 current = try await api.transfer(transfer.id)
             }
 
             let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appending(path: "HoshinoTransfer")
             var saved: [URL] = []
-            if let direct = current.directInfo, let host = direct.host.isEmpty ? nil : direct.host, let port = direct.port {
+            var p2pFailed = false
+            if let peers = current.peerCandidates, !peers.isEmpty {
+                do {
+                    saved = try await downloadP2P(transfer: current, peers: peers, to: folder)
+                    _ = try await api.completeP2PTransfer(transfer.id)
+                } catch {
+                    p2pFailed = true
+                    for url in saved { try? FileManager.default.removeItem(at: url) }
+                    saved = []
+                }
+            }
+            if saved.isEmpty, !p2pFailed || current.directInfo != nil,
+               let direct = current.directInfo, let host = direct.host.isEmpty ? nil : direct.host, let port = direct.port {
                 saved = try await downloadDirect(transfer: current, direct: direct, host: host, port: port, to: folder)
                 _ = try await api.completeDirectTransfer(transfer.id)
-            } else {
+            } else if saved.isEmpty {
                 try await api.requestRelayFallback(transferId: transfer.id)
                 let completed = try await waitForTransfer(transfer.id, terminal: ["Completed", "Failed", "Cancelled"])
                 guard completed.status == "Completed" else { throw APIClientError.transferState(completed.status) }
@@ -278,6 +314,32 @@ final class SessionStore: ObservableObject {
             savedFiles = saved
         } catch { errorMessage = error.localizedDescription }
         await refreshAll()
+    }
+
+    private func downloadP2P(transfer: TransferRecord, peers: [PeerCandidate], to folder: URL) async throws -> [URL] {
+        let sock = P2PChannel.openSocket()
+        guard sock >= 0 else { throw APIClientError.invalidResponse }
+        defer { P2PChannel.closeSocket(sock) }
+        guard let publicMapping = P2PChannel.stunBinding(sock: sock) else { throw APIClientError.invalidResponse }
+        let lanIp = LanTransferServer.localIPv4() ?? "127.0.0.1"
+        let lanPort = P2PChannel.localPort(sock: sock)
+        try await api.registerCandidates(transferId: transfer.id, host: publicMapping.host, port: publicMapping.port, lanHost: lanIp, lanPort: lanPort)
+        var candidates: [P2PChannel.Endpoint] = []
+        for peer in peers {
+            if let endpoint = P2PChannel.endpoint(host: peer.host, port: peer.port) { candidates.append(endpoint) }
+            if let lanHost = peer.lanHost, let lanPort = peer.lanPort, let endpoint = P2PChannel.endpoint(host: lanHost, port: lanPort) { candidates.append(endpoint) }
+        }
+        guard !candidates.isEmpty,
+              let peerEndpoint = P2PChannel.establish(sock: sock, candidatesProvider: { candidates }, shouldStop: { false }) else {
+            throw APIClientError.invalidResponse
+        }
+        let payloads = transfer.items.map { item in
+            P2PChannel.ItemPayload(id: item.id, fileName: item.fileName, size: item.size, sha256: item.sha256, localPath: nil)
+        }
+        return try P2PChannel.receiveAll(sock: sock, peer: peerEndpoint, items: payloads, folder: folder,
+                                         shouldStop: { false }) { fraction in
+            Task { @MainActor in self.transferFraction = fraction }
+        }
     }
 
     private func downloadDirect(transfer: TransferRecord, direct: DirectEndpointInfo, host: String, port: Int, to folder: URL) async throws -> [URL] {

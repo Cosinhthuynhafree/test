@@ -82,6 +82,16 @@ struct DirectEndpointInfo: Codable {
     let token: String?
 }
 
+struct PeerCandidate: Codable {
+    let host: String
+    let port: Int?
+    let lanHost: String?
+    let lanPort: Int?
+}
+
+struct RegisterCandidatesBody: Codable { let candidates: [CandidateBody] }
+struct CandidateBody: Codable { let host: String; let port: Int; let lanHost: String; let lanPort: Int }
+
 struct TransferRecord: Codable, Identifiable {
     let id: String
     let senderId: String
@@ -92,6 +102,7 @@ struct TransferRecord: Codable, Identifiable {
     let chunkSize: Int?
     let directInfo: DirectEndpointInfo?
     let relayRequested: Bool?
+    let peerCandidates: [PeerCandidate]?
     let items: [TransferItem]
 }
 struct TransferItem: Codable, Identifiable {
@@ -331,6 +342,16 @@ final class APIClient {
 
     func completeDirectTransfer(_ id: String) async throws -> TransferRecord {
         let envelope: TransferEnvelope = try await send("api/v1/transfers/\(id)/complete-direct", method: "POST", body: Data("{}".utf8))
+        return envelope.transfer
+    }
+
+    func registerCandidates(transferId: String, host: String, port: UInt16, lanHost: String, lanPort: UInt16) async throws {
+        let body = try JSONEncoder().encode(RegisterCandidatesBody(candidates: [CandidateBody(host: host, port: Int(port), lanHost: lanHost, lanPort: Int(lanPort))]))
+        try await sendEmpty("api/v1/transfers/\(transferId)/candidates", method: "POST", body: body)
+    }
+
+    func completeP2PTransfer(_ id: String) async throws -> TransferRecord {
+        let envelope: TransferEnvelope = try await send("api/v1/transfers/\(id)/p2p-complete", method: "POST", body: Data("{}".utf8))
         return envelope.transfer
     }
 

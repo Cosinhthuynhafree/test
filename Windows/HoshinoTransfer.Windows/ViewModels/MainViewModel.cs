@@ -21,6 +21,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private readonly TransferTransportRegistry _transportRegistry;
     private readonly TransferManager _transferManager;
     private readonly TransferSourceStore _sourceStore = new();
+    private readonly TransferPreferencesStore _preferences = new();
     private readonly CancellationTokenSource _lifetime = new();
     private CancellationTokenSource? _eventLifetime;
     private string _username = "";
@@ -64,7 +65,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     {
         _api = api;
         _transportRegistry = new TransferTransportRegistry(api);
-        _transferManager = new TransferManager(api, _transportRegistry);
+        _transferManager = new TransferManager(api, _transportRegistry, () => _preferences.Load());
         SubmitAuthCommand = new AsyncRelayCommand(SubmitAuthAsync, () => !IsBusy);
         NavigateCommand = new RelayCommand<string>(Navigate);
         ToggleAuthModeCommand = new RelayCommand(() => { IsRegisterMode = !IsRegisterMode; ErrorMessage = ""; });
@@ -133,6 +134,28 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public System.Windows.Media.ImageSource? PairingQrImage { get => _pairingQrImage; private set { if (Set(ref _pairingQrImage, value)) OnPropertyChanged(nameof(HasPairingQr)); } }
     public bool HasPairingQr => PairingQrImage is not null;
     public string CurrentUserId => _currentUserId;
+    public string TransportPreferenceName
+    {
+        get => _preferences.Load() switch
+        {
+            TransferPreference.DirectWifi => "Direct Wi-Fi",
+            TransferPreference.P2P => "P2P (hole punch)",
+            TransferPreference.ServerApi => "Server API (30 percent slower)",
+            _ => "Auto",
+        };
+        set
+        {
+            var parsed = value switch
+            {
+                "Direct Wi-Fi" => TransferPreference.DirectWifi,
+                "P2P (hole punch)" => TransferPreference.P2P,
+                "Server API (30 percent slower)" => TransferPreference.ServerApi,
+                _ => TransferPreference.Auto,
+            };
+            _preferences.Save(parsed);
+            OnPropertyChanged(nameof(TransportPreferenceName));
+        }
+    }
     public string CurrentChatId { get => _currentChatId; private set => Set(ref _currentChatId, value); }
     public string CurrentPeerName { get => _currentPeerName; private set => Set(ref _currentPeerName, value); }
     public string SelectedTransferId { get => _selectedTransferId; set { if (Set(ref _selectedTransferId, value)) { CancelTransferCommand.NotifyCanExecuteChanged(); PauseTransferCommand.NotifyCanExecuteChanged(); ResumeTransferCommand.NotifyCanExecuteChanged(); RetryTransferCommand.NotifyCanExecuteChanged(); OnPropertyChanged(nameof(ActiveTransportLabel)); } } }
@@ -777,7 +800,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             if (final.Status != "Transferring") throw new ApiException($"Transfer ended with status {final.Status}.", System.Net.HttpStatusCode.Conflict);
             IsBusy = true;
             var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "HoshinoTransfer");
-            var saved = await _transferManager.DownloadWithTransportAsync(final, folder, null, _lifetime.Token);
+            var saved = await ReceiveTransferAsync(final, folder);
             await RefreshDataAsync();
             NoticeMessage = $"Received and SHA-256 verified · {final.Transport} · {folder}";
         }
@@ -786,6 +809,24 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             ErrorMessage = ex.Message;
         }
         finally { IsBusy = false; }
+    }
+
+    private async Task<IReadOnlyList<string>> ReceiveTransferAsync(TransferDto transfer, string folder)
+    {
+        var preference = _preferences.Load();
+        if (preference != TransferPreference.ServerApi && transfer.PeerCandidates.Count > 0 && _transportRegistry.P2P.IsAvailable)
+        {
+            try
+            {
+                var mapped = transfer.Items.Select(item => new TransferSource(item.Id, item.FileName, string.Empty, item.Size)).ToList();
+                return await _transportRegistry.P2P.ReceiveAllAsync(transfer, mapped, folder, null, _lifetime.Token);
+            }
+            catch (Exception ex) when (ex is TimeoutException or IOException or InvalidOperationException or HttpRequestException && !_lifetime.Token.IsCancellationRequested)
+            {
+                ErrorMessage = $"P2P did not open ({ex.Message}). Falling back to the relay.";
+            }
+        }
+        return await _transferManager.DownloadWithTransportAsync(transfer, folder, null, _lifetime.Token);
     }
 
     private async Task TransferActionAsync(string action)

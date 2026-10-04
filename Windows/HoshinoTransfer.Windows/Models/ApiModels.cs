@@ -63,6 +63,14 @@ public sealed class MessageDto
     public bool IsOwn { get; set; }
 }
 
+public sealed class PeerCandidateInfo
+{
+    public string Host { get; set; } = "";
+    public int? Port { get; set; }
+    public string? LanHost { get; set; }
+    public int? LanPort { get; set; }
+}
+
 public sealed class DirectEndpointInfo
 {
     public string Host { get; set; } = "";
@@ -89,6 +97,7 @@ public sealed class TransferDto
     public int ChunkSize { get; set; } = 4 * 1024 * 1024;
     public DirectEndpointInfo? DirectInfo { get; set; }
     public bool RelayRequested { get; set; }
+    public List<PeerCandidateInfo> PeerCandidates { get; set; } = [];
     public List<TransferItemDto> Items { get; set; } = [];
 }
 public sealed class TransferItemDto

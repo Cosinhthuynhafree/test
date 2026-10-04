@@ -30,6 +30,10 @@ const migrations = [
     if (!transferColumns.has('direct_info')) db.exec('ALTER TABLE transfers ADD COLUMN direct_info TEXT');
     if (!transferColumns.has('relay_requested')) db.exec('ALTER TABLE transfers ADD COLUMN relay_requested INTEGER NOT NULL DEFAULT 0');
   } },
+  { version: 4, name: 'p2p-candidate-signaling', up: () => {
+    const transferColumns = new Set(db.prepare('PRAGMA table_info(transfers)').all().map((column) => column.name));
+    if (!transferColumns.has('candidates')) db.exec('ALTER TABLE transfers ADD COLUMN candidates TEXT');
+  } },
 ];
 for (const migration of migrations) {
   if (db.prepare('SELECT 1 FROM schema_migrations WHERE version=?').get(migration.version)) continue;

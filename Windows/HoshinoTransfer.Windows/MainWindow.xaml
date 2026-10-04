@@ -618,6 +618,18 @@
                                         </Border>
                                         <Border Style="{StaticResource Card}" Margin="0,0,0,14">
                                             <StackPanel>
+                                                <TextBlock Text="Transfer preference" Style="{StaticResource CardTitle}" />
+                                                <TextBlock Text="Auto picks the fastest working channel: P2P over the internet, then Direct Wi-Fi on the same LAN, then the public Server API. Choosing Server API caps the relay speed at 70 percent." Style="{StaticResource MutedText}" Margin="0,6,0,10" />
+                                                <ComboBox SelectedValuePath="Content" SelectedValue="{Binding DataContext.TransportPreferenceName, RelativeSource={RelativeSource AncestorType=Window}}" Background="#10141F" Foreground="#EDF0F7" BorderBrush="{StaticResource Line}" Padding="10,8" MinWidth="260" HorizontalAlignment="Left">
+                                                    <ComboBoxItem Content="Auto" />
+                                                    <ComboBoxItem Content="Direct Wi-Fi" />
+                                                    <ComboBoxItem Content="P2P (hole punch)" />
+                                                    <ComboBoxItem Content="Server API (30 percent slower)" />
+                                                </ComboBox>
+                                            </StackPanel>
+                                        </Border>
+                                        <Border Style="{StaticResource Card}" Margin="0,0,0,14">
+                                            <StackPanel>
                                                 <TextBlock Text="Security" Style="{StaticResource CardTitle}" />
                                                 <TextBlock Text="Access tokens auto-refresh and live in Windows Credential Manager (DPAPI, per user). Refresh credentials rotate on every refresh; reuse of a rotated token is rejected by the server." Style="{StaticResource MutedText}" Margin="0,8,0,0" />
                                                 <TextBlock Text="Transfers are authorized per participant: only the sender uploads chunks, only the receiver downloads, and every file is SHA-256 verified during assembly." Style="{StaticResource MutedText}" Margin="0,6,0,0" />
