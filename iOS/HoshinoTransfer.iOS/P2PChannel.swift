@@ -261,7 +261,7 @@ enum P2PChannel {
             let name = URL(fileURLWithPath: item.fileName).lastPathComponent
             let destination = folder.appending(path: "\(UUID().uuidString.prefix(8))_\(name)")
             FileManager.default.createFile(atPath: destination.path, contents: nil)
-            guard let handle = FileHandle(forWritingTo: destination) else { throw APIClientError.invalidResponse }
+            guard let handle = try? FileHandle(forWritingTo: destination) else { throw APIClientError.invalidResponse }
             defer { try? handle.close() }
             var hasher = SHA256()
             let segmentCount = Int(ceil(Double(item.size) / Double(segmentSize)))
