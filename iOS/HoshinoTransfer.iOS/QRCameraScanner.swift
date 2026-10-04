@@ -44,7 +44,7 @@ enum QRImageDetector {
     static func codes(in image: UIImage) -> [String] {
         guard let cgImage = image.cgImage else { return [] }
         let context = CIContext()
-        guard let detector = CIDetector(ofType: CIDetectorTypeQRCode, using: context, options: [CIDetectorAccuracy: CIDetectorAccuracyHigh]) else { return [] }
+        guard let detector = CIDetector(ofType: CIDetectorTypeQRCode, context: context, options: [CIDetectorAccuracy: CIDetectorAccuracyHigh]) else { return [] }
         let features = detector.features(in: CIImage(cgImage: cgImage))
         return features.compactMap { ($0 as? CIQRCodeFeature)?.messageString }
     }
