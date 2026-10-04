@@ -1,5 +1,48 @@
+import CoreImage.CIFilterBuiltins
 import SwiftUI
 import UniformTypeIdentifiers
+import UIKit
+
+enum PairingQR {
+    /// Renders the pairing deep link as a QR bitmap for the other device's camera.
+    static func image(for code: String, size: CGFloat = 220) -> UIImage? {
+        let payload = "hoshinotransfer://pair?code=\(code)"
+        let filter = CIFilter.qrCodeGenerator()
+        filter.message = Data(payload.utf8)
+        filter.correctionLevel = "M"
+        guard let output = filter.outputImage else { return nil }
+        let scaled = output.transformed(by: CGAffineTransform(scaleX: size / output.extent.width, y: size / output.extent.height))
+        let context = CIContext(options: [.useSoftwareRenderer: false])
+        guard let cgImage = context.createCGImage(scaled, from: scaled.extent) else { return nil }
+        return UIImage(cgImage: cgImage)
+    }
+}
+
+struct PairingCodeCard: View {
+    let code: PairingCode
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Pairing code").font(.subheadline.weight(.semibold))
+            Text(code.pairingCode)
+                .font(.title2.monospaced().weight(.bold))
+                .textSelection(.enabled)
+            if let image = PairingQR.image(for: code.pairingCode) {
+                Image(uiImage: image)
+                    .interpolation(.none)
+                    .resizable()
+                    .frame(width: 180, height: 180)
+                    .padding(10)
+                    .background(Color.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+            Text("Scan the QR or type the code on the other signed-in device. Expires in \(max(1, code.expiresInSeconds / 60)) minutes.")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 4)
+    }
+}
 
 struct RootView: View {
     @EnvironmentObject private var session: SessionStore
@@ -120,6 +163,30 @@ struct HomeView: View {
                     }
                     .padding(.vertical, 7)
                 }
+                if session.isWorking || session.transferFraction > 0 && session.transferFraction < 1 {
+                    Section("Active transfer") {
+                        ProgressView(value: min(1, max(0, session.transferFraction)))
+                            .tint(.purple)
+                        HStack {
+                            Text(session.activeTransferLabel).font(.caption).foregroundStyle(.secondary)
+                            Spacer()
+                            Text(session.activeTransferDetail).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                if let message = session.errorMessage {
+                    Section { Text(message).font(.footnote).foregroundStyle(.red) }
+                }
+                if !session.savedFiles.isEmpty {
+                    Section("Received") {
+                        ForEach(session.savedFiles, id: \.self) { url in
+                            VStack(alignment: .leading) {
+                                Text(url.lastPathComponent)
+                                Text(url.path).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                            }
+                        }
+                    }
+                }
                 Section("Transfer") {
                     NavigationLink { TransferListView() } label: { Label("Send files", systemImage: "arrow.up.doc") }
                     NavigationLink { TransferHistoryView() } label: { Label("Transfers", systemImage: "clock.arrow.circlepath") }
@@ -145,30 +212,58 @@ struct HomeView: View {
 struct TransferListView: View {
     @EnvironmentObject private var session: SessionStore
     @State private var showPicker = false
+    @State private var targetFriendId: String = ""
+    @State private var didAutoSelect = false
+
+    private var acceptedFriends: [FriendRecord] {
+        session.friends.filter { $0.state == "Accepted" }
+    }
+
+    private var target: FriendRecord? {
+        acceptedFriends.first { $0.user.id == targetFriendId } ?? acceptedFriends.first
+    }
 
     var body: some View {
         List {
             Section {
-                Button {
-                    showPicker = true
-                } label: {
-                    Label("Choose files to send", systemImage: "square.and.arrow.up")
-                        .frame(maxWidth: .infinity)
+                if acceptedFriends.isEmpty {
+                    Text("Accept a friend first to enable transfers.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                } else {
+                    Picker("Send to", selection: $targetFriendId) {
+                        ForEach(acceptedFriends) { friend in
+                            Text(friend.user.displayName).tag(friend.user.id)
+                        }
+                    }
+                    Button {
+                        showPicker = true
+                    } label: {
+                        Label("Choose files to send", systemImage: "square.and.arrow.up")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .disabled(target == nil)
+                    if let target {
+                        Text("Files will be sent to \(target.user.displayName). Direct Wi-Fi is tried first when both devices share a LAN, otherwise the Server Relay is used automatically.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
                 }
             }
-            if let friend = session.friends.first(where: { $0.state == "Accepted" }) {
-                Section {
-                    Text("Files will be sent to \(friend.user.displayName) over the named Server Relay transport.")
-                        .font(.footnote).foregroundStyle(.secondary)
+            if session.isWorking || session.transferFraction > 0 {
+                Section("In progress") {
+                    ProgressView(value: min(1, max(0, session.transferFraction))).tint(.purple)
+                    Text(session.activeTransferDetail).font(.caption).foregroundStyle(.secondary)
                 }
-            } else {
-                Section { Text("Accept a friend first to enable transfers.").font(.footnote).foregroundStyle(.secondary) }
             }
         }
         .navigationTitle("Send files")
+        .onAppear {
+            guard !didAutoSelect else { return }
+            didAutoSelect = true
+            targetFriendId = acceptedFriends.first?.user.id ?? ""
+        }
         .fileImporter(isPresented: $showPicker, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             guard case .success(let urls) = result, !urls.isEmpty,
-                  let friend = session.friends.first(where: { $0.state == "Accepted" }) else { return }
+                  let friend = target else { return }
             Task { await session.sendFiles(urls, to: friend.user.id) }
         }
     }
@@ -230,20 +325,35 @@ struct DevicesView: View {
 
     var body: some View {
         Form {
-            if let code = session.pairingCode {
-                Section("Pairing code (expires in \(max(1, code.expiresInSeconds / 60)) min)") {
-                    Text(code.pairingCode).font(.title2.monospaced().weight(.bold))
-                    Text("Enter this code on the other signed-in device.").font(.footnote).foregroundStyle(.secondary)
+            Section {
+                Button {
+                    Task { await session.createPairingCode() }
+                } label: {
+                    Label(session.pairingCode == nil ? "Create pairing code" : "Create a new code",
+                          systemImage: "qrcode")
                 }
+                if let code = session.pairingCode {
+                    PairingCodeCard(code: code)
+                    Button("Clear", role: .destructive) { session.clearPairingCode() }
+                        .font(.footnote)
+                }
+            } header: {
+                Text("Pair another device")
+            } footer: {
+                Text("The code is single-use, expires in 5 minutes, and the second device must be signed in to this account.")
             }
             Section("Pair with a code from another device") {
                 TextField("Eight-digit code", text: $pairingInput)
                     .keyboardType(.numberPad)
+                    .onChange(of: pairingInput) { _ in
+                        let digits = String(pairingInput.filter(\.isNumber).prefix(8))
+                        if digits != pairingInput { pairingInput = digits }
+                    }
                 TextField("This device name", text: $newDeviceName)
                 Button("Pair") {
                     Task { await session.pairDevice(code: pairingInput, name: newDeviceName.isEmpty ? UIDevice.current.name : newDeviceName) }
                 }
-                .disabled(pairingInput.count != 8)
+                .disabled(pairingInput.count != 8 || session.isWorking)
                 NavigationLink { PairByQRView() } label: {
                     Label("Scan pairing QR code", systemImage: "qrcode.viewfinder")
                 }
@@ -407,6 +517,9 @@ struct ChatView: View {
             .padding(12)
         }
         .navigationTitle(chat.user?.displayName ?? "Chat")
+        .task {
+            await session.selectChat(chat)
+        }
         .fileImporter(isPresented: $showPicker, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             guard case .success(let urls) = result, !urls.isEmpty else { return }
             Task { await session.sendFiles(urls, to: chat.userId ?? chat.user?.id ?? "", in: chat) }
@@ -481,8 +594,8 @@ struct SettingsView: View {
                 .disabled(checking)
             }
             Section("Transfers") {
-                LabeledContent("Preferred mode", value: "Direct Wi-Fi")
-                Text("Bytes move device-to-device when both sides share a LAN, and fall back to the Server Relay automatically. Cross-network P2P and Lightning cable are unavailable and are never reported as active.")
+                LabeledContent("Channel order", value: "P2P → Direct Wi-Fi → Server Relay")
+                Text("Bytes move device-to-device over UDP hole punching or a shared LAN, and fall back to the Server Relay automatically. Lightning cable is unavailable and is never reported as active.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("About") {

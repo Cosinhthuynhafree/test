@@ -1,4 +1,5 @@
 import CryptoKit
+import Foundation
 import SwiftUI
 
 @main
@@ -40,10 +41,30 @@ final class SessionStore: ObservableObject {
     private var eventsTask: Task<Void, Never>?
     private var typingTask: Task<Void, Never>?
     private var knownFileURLs: [String: [URL]] = [:]
+    private var lastProgressRefresh: Date?
 
     var isAuthenticated: Bool { user != nil && api.isAuthenticated }
     var serviceHost: String { api.baseURL.host ?? "HoshinoTransfer service" }
     var currentUserId: String { user?.id ?? "" }
+
+    var activeTransferLabel: String {
+        if let transfer = transfers.first(where: { $0.status == "Transferring" }) {
+            return "\(transfer.transport) · \(transfer.items.count) file\(transfer.items.count == 1 ? "" : "s")"
+        }
+        return isWorking ? "Working…" : "No active transfer"
+    }
+
+    var activeTransferDetail: String {
+        let percent = Int((min(1, max(0, transferFraction)) * 100).rounded())
+        if transferSpeed > 0 {
+            let speed = ByteCountFormatter.string(fromByteCount: Int64(transferSpeed), countStyle: .file)
+            if let eta = transferEta, eta.isFinite, eta > 0 {
+                return "\(percent)% · \(speed)/s · \(Int(eta.rounded()))s left"
+            }
+            return "\(percent)% · \(speed)/s"
+        }
+        return "\(percent)%"
+    }
 
     func bootstrap() async {
         do {
@@ -130,17 +151,30 @@ final class SessionStore: ObservableObject {
     }
 
     func registerCurrentDevice(name: String) async {
+        isWorking = true
+        errorMessage = nil
+        defer { isWorking = false }
         do { _ = try await api.registerDevice(name: name, platform: "iOS"); await refreshAll(); startEventStream() }
         catch { errorMessage = error.localizedDescription }
     }
 
     func createPairingCode() async {
+        isWorking = true
+        errorMessage = nil
+        defer { isWorking = false }
         do { pairingCode = try await api.createPairingCode() }
         catch { errorMessage = error.localizedDescription }
     }
 
+    func clearPairingCode() { pairingCode = nil }
+
     func pairDevice(code: String, name: String) async {
-        do { _ = try await api.pairDevice(code: code, name: name, platform: "iOS"); pairingCode = nil; await refreshAll() }
+        let digits = code.filter(\.isNumber)
+        guard digits.count == 8 else { errorMessage = "The pairing code must be eight digits."; return }
+        isWorking = true
+        errorMessage = nil
+        defer { isWorking = false }
+        do { _ = try await api.pairDevice(code: digits, name: name, platform: "iOS"); pairingCode = nil; await refreshAll() }
         catch { errorMessage = error.localizedDescription }
     }
 
@@ -157,6 +191,13 @@ final class SessionStore: ObservableObject {
             messages = try await api.messages(chatId: chat.id)
             try await api.markRead(chatId: chat.id)
         } catch { errorMessage = error.localizedDescription }
+    }
+
+    /// Opening a chat from the conversation list must make it the active chat, otherwise
+    /// sendMessage/typing silently no-op because they are scoped to `activeChat`.
+    func selectChat(_ chat: ChatRecord) async {
+        activeChat = chat
+        await refreshChatIfOpen()
     }
 
     func sendMessage(_ text: String, attachmentId: String? = nil) async {
@@ -181,6 +222,8 @@ final class SessionStore: ObservableObject {
 
     func sendFiles(_ urls: [URL], to receiverId: String, in chat: ChatRecord? = nil) async {
         guard !urls.isEmpty else { return }
+        if let chat { activeChat = chat }
+        guard !receiverId.isEmpty else { errorMessage = "Choose a contact before sending files."; return }
         isWorking = true
         errorMessage = nil
         transferFraction = 0; transferSpeed = 0; transferEta = nil
@@ -479,10 +522,27 @@ final class SessionStore: ObservableObject {
                 incomingTransfer = transfer
                 if !transfers.contains(where: { $0.id == transfer.id }) { transfers.insert(transfer, at: 0) }
             }
-        case "transfer.completed", "transfer.failed", "transfer.cancelled", "transfer.progress":
+        case "transfer.progress":
+            // Progress fires per chunk. Refetching friends/devices/chats/transfers on every
+            // event floods the SSE stream, so only the transfer list is refreshed, at most
+            // once per second.
+            if lastProgressRefresh == nil || Date().timeIntervalSince(lastProgressRefresh!) > 1 {
+                lastProgressRefresh = Date()
+                await refreshTransfersOnly()
+            }
+        case "transfer.completed", "transfer.failed", "transfer.cancelled":
             await refreshAll()
         default:
             if name.hasPrefix("friend.") || name.hasPrefix("device.") || name.hasPrefix("chat.") { await refreshAll() }
+        }
+    }
+
+    private func refreshTransfersOnly() async {
+        guard isAuthenticated else { return }
+        guard let value = try? await api.transfers() else { return }
+        transfers = value
+        if incomingTransfer == nil || incomingTransfer?.status != "Pending" {
+            incomingTransfer = value.first(where: { $0.receiverId == currentUserId && $0.status == "Pending" })
         }
     }
 
