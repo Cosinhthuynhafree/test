@@ -30,6 +30,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private string _friendUsername = "";
     private string _searchQuery = "";
     private string _pairingCode = "";
+    private string _pairingCodeDisplay = "";
+    private string _pairingCodeHint = "";
     private string _messageDraft = "";
     private string _transferSpeed = "—";
     private string _transferEta = "—";
@@ -85,7 +87,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         RetryFailedMessagesCommand = new AsyncRelayCommand(RetryFailedMessagesAsync, () => !IsSending && _failedOutbox.Count > 0);
         RegisterDeviceCommand = new AsyncRelayCommand(RegisterDeviceAsync, () => !IsBusy && !string.IsNullOrWhiteSpace(DeviceName));
         CreatePairingCodeCommand = new AsyncRelayCommand(CreatePairingCodeAsync, () => !IsBusy);
-        PairDeviceCommand = new AsyncRelayCommand(PairDeviceAsync, () => !IsBusy && PairingCode.Length == 8);
+        PairDeviceCommand = new AsyncRelayCommand(PairDeviceAsync, () => !IsBusy && PairingCodeInput.Length == 8);
         RevokeDeviceCommand = new AsyncRelayCommand(RevokeSelectedDeviceAsync, () => !IsBusy && SelectedDevice is not null);
         OpenFilesCommand = new RelayCommand(OpenFiles);
         OpenChatAttachmentCommand = new RelayCommand(OpenChatAttachment);
@@ -115,14 +117,27 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public string FriendUsername { get => _friendUsername; set => Set(ref _friendUsername, value); }
     public string SearchQuery { get => _searchQuery; set { if (Set(ref _searchQuery, value)) SearchUsersCommand.NotifyCanExecuteChanged(); } }
     public string PairingCode { get => _pairingCode; set { if (Set(ref _pairingCode, value)) PairDeviceCommand.NotifyCanExecuteChanged(); } }
+    public string PairingCodeDisplay { get => _pairingCodeDisplay; private set => Set(ref _pairingCodeDisplay, value); }
+    public string PairingCodeHint { get => _pairingCodeHint; private set => Set(ref _pairingCodeHint, value); }
+    public string PairingCodeInput
+    {
+        get => _pairingCode;
+        set
+        {
+            var digits = new string((value ?? "").Where(char.IsDigit).Take(8).ToArray());
+            if (Set(ref _pairingCode, digits)) PairDeviceCommand.NotifyCanExecuteChanged();
+        }
+    }
     public string MessageDraft { get => _messageDraft; set { if (Set(ref _messageDraft, value)) SendMessageCommand.NotifyCanExecuteChanged(); } }
     public string DeviceName { get => _deviceName; set => Set(ref _deviceName, value); }
     public bool IsRegisterMode { get => _isRegisterMode; set { if (Set(ref _isRegisterMode, value)) { OnPropertyChanged(nameof(AuthActionLabel)); OnPropertyChanged(nameof(AuthModePrompt)); } } }
     public bool IsAuthenticated { get => _isAuthenticated; private set => Set(ref _isAuthenticated, value); }
     public bool IsBusy { get => _isBusy; private set { if (Set(ref _isBusy, value)) { SubmitAuthCommand.NotifyCanExecuteChanged(); LogoutCommand.NotifyCanExecuteChanged(); RefreshBackendCommand.NotifyCanExecuteChanged(); RefreshDataCommand.NotifyCanExecuteChanged(); OnPropertyChanged(nameof(BusyLabel)); } } }
     public bool IsSending { get => _isSending; private set { if (Set(ref _isSending, value)) SendMessageCommand.NotifyCanExecuteChanged(); } }
-    public string ErrorMessage { get => _errorMessage; private set => Set(ref _errorMessage, value); }
-    public string NoticeMessage { get => _noticeMessage; private set => Set(ref _noticeMessage, value); }
+    public string ErrorMessage { get => _errorMessage; private set { if (Set(ref _errorMessage, value)) OnPropertyChanged(nameof(HasErrorMessage)); } }
+    public string NoticeMessage { get => _noticeMessage; private set { if (Set(ref _noticeMessage, value)) OnPropertyChanged(nameof(HasNoticeMessage)); } }
+    public bool HasErrorMessage => !string.IsNullOrEmpty(_errorMessage);
+    public bool HasNoticeMessage => !string.IsNullOrEmpty(_noticeMessage);
     public string Page { get => _page; private set => Set(ref _page, value); }
     public string PageDescription { get => _pageDescription; private set => Set(ref _pageDescription, value); }
     public string BackendStatus { get => _backendStatus; private set => Set(ref _backendStatus, value); }
@@ -267,12 +282,13 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         finally { IsBusy = false; }
     }
 
-    private async Task EnsureDeviceRegisteredAsync()
+    private async Task EnsureDeviceRegisteredAsync(bool force = false)
     {
-        if (!string.IsNullOrWhiteSpace(_api.DeviceId))
+        if (!force && !string.IsNullOrWhiteSpace(_api.DeviceId))
         {
             try { await _api.HeartbeatDeviceAsync(_lifetime.Token); return; }
             catch (ApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound) { }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException) { }
         }
         var device = await _api.RegisterDeviceAsync(DeviceName, "Windows", _lifetime.Token);
         NoticeMessage = $"Registered this Windows device: {device.DeviceName}.";
@@ -473,14 +489,20 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     private async Task CreatePairingCodeAsync()
     {
+        ErrorMessage = "";
+        IsBusy = true;
         try
         {
             var result = await _api.CreatePairingCodeAsync(_lifetime.Token);
-            PairingCode = result.PairingCode;
+            PairingCodeDisplay = result.PairingCode;
             PairingQrImage = RenderPairingQr(result.PairingCode);
-            NoticeMessage = $"Pair code expires in {result.ExpiresInSeconds / 60} minutes. Scan it or type it on the second signed-in device.";
+            PairingCodeHint = PairingQrImage is null
+                ? $"Expires in {result.ExpiresInSeconds / 60} minutes. Type the code on the second device."
+                : $"Expires in {result.ExpiresInSeconds / 60} minutes. Scan the QR or type the code on the second device.";
+            NoticeMessage = $"Pairing code {result.PairingCode} created. It expires in {result.ExpiresInSeconds / 60} minutes.";
         }
-        catch (Exception ex) when (ex is ApiException or HttpRequestException or TaskCanceledException) { ErrorMessage = ex.Message; }
+        catch (Exception ex) when (ex is ApiException or HttpRequestException or TaskCanceledException) { ErrorMessage = $"Could not create a pairing code: {ex.Message}"; }
+        finally { IsBusy = false; }
     }
 
     private static System.Windows.Media.ImageSource? RenderPairingQr(string code)
@@ -505,15 +527,17 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     private async Task PairDeviceAsync()
     {
-        if (PairingCode.Length != 8) { ErrorMessage = "Enter the eight-digit pairing code."; return; }
+        if (PairingCodeInput.Length != 8) { ErrorMessage = "Enter the eight-digit pairing code."; return; }
+        ErrorMessage = ""; IsBusy = true;
         try
         {
-            var device = await _api.PairDeviceAsync(PairingCode, DeviceName, "Windows", _lifetime.Token);
-            PairingCode = "";
+            var device = await _api.PairDeviceAsync(PairingCodeInput, DeviceName, "Windows", _lifetime.Token);
+            PairingCodeInput = "";
             NoticeMessage = $"Device paired: {device.DeviceName}.";
             await RefreshDataAsync();
         }
-        catch (Exception ex) when (ex is ApiException or HttpRequestException or TaskCanceledException) { ErrorMessage = ex.Message; }
+        catch (Exception ex) when (ex is ApiException or HttpRequestException or TaskCanceledException) { ErrorMessage = $"Pairing failed: {ex.Message}"; }
+        finally { IsBusy = false; }
     }
 
     private async Task RevokeSelectedDeviceAsync()
@@ -636,14 +660,14 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     private async Task RegisterDeviceAsync()
     {
-        if (string.IsNullOrWhiteSpace(DeviceName)) return;
-        IsBusy = true;
+        if (string.IsNullOrWhiteSpace(DeviceName)) { ErrorMessage = "Enter a name for this device."; return; }
+        IsBusy = true; ErrorMessage = "";
         try
         {
-            await EnsureDeviceRegisteredAsync();
+            await EnsureDeviceRegisteredAsync(force: true);
             await RefreshDataAsync();
         }
-        catch (Exception ex) when (ex is ApiException or HttpRequestException or TaskCanceledException) { ErrorMessage = ex.Message; }
+        catch (Exception ex) when (ex is ApiException or HttpRequestException or TaskCanceledException) { ErrorMessage = $"Could not register the device: {ex.Message}"; }
         finally { IsBusy = false; }
     }
 
@@ -814,19 +838,39 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private async Task<IReadOnlyList<string>> ReceiveTransferAsync(TransferDto transfer, string folder)
     {
         var preference = _preferences.Load();
+        var progress = new Progress<TransferProgress>(value =>
+        {
+            TransferPercent = value.TotalBytes <= 0 ? 100 : Math.Clamp(value.TransferredBytes * 100d / value.TotalBytes, 0, 100);
+            TransferSpeed = FormatSpeed(value.BytesPerSecond);
+            TransferEta = value.Remaining is null ? "—" : FormatDuration(value.Remaining.Value);
+        });
+
         if (preference != TransferPreference.ServerApi && transfer.PeerCandidates.Count > 0 && _transportRegistry.P2P.IsAvailable)
         {
             try
             {
                 var mapped = transfer.Items.Select(item => new TransferSource(item.Id, item.FileName, string.Empty, item.Size)).ToList();
-                return await _transportRegistry.P2P.ReceiveAllAsync(transfer, mapped, folder, null, _lifetime.Token);
+                return await _transportRegistry.P2P.ReceiveAllAsync(transfer, mapped, folder, progress, _lifetime.Token);
             }
-            catch (Exception ex) when (ex is TimeoutException or IOException or InvalidOperationException or HttpRequestException && !_lifetime.Token.IsCancellationRequested)
+            catch (Exception ex) when (!_lifetime.Token.IsCancellationRequested
+                && (ex is TimeoutException or IOException or InvalidOperationException or HttpRequestException))
             {
-                ErrorMessage = $"P2P did not open ({ex.Message}). Falling back to the relay.";
+                TransferLogs.Add($"P2P did not open ({ex.Message}). Requesting the Server Relay.");
             }
         }
-        return await _transferManager.DownloadWithTransportAsync(transfer, folder, null, _lifetime.Token);
+
+        try
+        {
+            return await _transferManager.DownloadWithTransportAsync(transfer, folder, progress, _lifetime.Token);
+        }
+        catch (Exception ex) when (!_lifetime.Token.IsCancellationRequested
+            && (ex is TimeoutException or IOException or InvalidOperationException or HttpRequestException))
+        {
+            // The sender may still be waiting on a direct channel. Tell it to finish over the relay and retry once.
+            TransferLogs.Add($"Direct channel failed ({ex.Message}). Falling back to the Server Relay.");
+            await _api.RequestRelayFallbackAsync(transfer.Id, _lifetime.Token);
+            return await _transferManager.DownloadWithTransportAsync(transfer, folder, progress, _lifetime.Token);
+        }
     }
 
     private async Task TransferActionAsync(string action)
@@ -898,7 +942,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private void Navigate(string? page)
     {
         if (string.IsNullOrWhiteSpace(page)) return;
-        Page = page; PageDescription = DescriptionFor(page); NoticeMessage = "";
+        Page = page; PageDescription = DescriptionFor(page); NoticeMessage = ""; ErrorMessage = "";
         if (page == "Transfer" && IsAuthenticated) _ = RefreshDataAsync();
     }
 

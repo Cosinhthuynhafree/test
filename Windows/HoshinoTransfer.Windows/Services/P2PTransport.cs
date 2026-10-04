@@ -68,7 +68,7 @@ public sealed class P2PTransport : ITransferTransport
                 cancellationToken.ThrowIfCancellationRequested();
                 var state = await _api.GetTransferAsync(transfer.Id, cancellationToken);
                 if (state.Status is "Completed" or "Failed" or "Cancelled") { terminal = state; break; }
-                if (state.RelayRequested || DateTimeOffset.UtcNow - started > TimeSpan.FromMinutes(20)) break;
+                if (state.RelayRequested || DateTimeOffset.UtcNow - started > TimeSpan.FromMinutes(5)) break;
                 await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
             }
         }

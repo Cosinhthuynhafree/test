@@ -5,6 +5,7 @@
         WindowStartupLocation="CenterScreen" Background="#0B0E14" Foreground="#EDF0F7"
         FontFamily="Segoe UI" TextOptions.TextRenderingMode="ClearType">
     <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis" />
         <SolidColorBrush x:Key="Surface" Color="#131826" />
         <SolidColorBrush x:Key="SurfaceAlt" Color="#1A2130" />
         <SolidColorBrush x:Key="Line" Color="#232B3D" />
@@ -278,13 +279,43 @@
             </Border>
 
             <Grid Grid.Column="1" Margin="34,26,34,22">
-                <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                 <StackPanel Grid.Row="0" Margin="0,0,0,22">
                     <TextBlock Text="{Binding Page}" FontSize="25" FontWeight="SemiBold" />
                     <TextBlock Text="{Binding PageDescription}" Foreground="{StaticResource Muted}" FontSize="12.5" Margin="0,5,0,0" TextWrapping="Wrap" />
                 </StackPanel>
 
-                <ContentControl Grid.Row="1" Content="{Binding Page}">
+                <Grid Grid.Row="1" Margin="0,0,0,14">
+                    <Grid.Style>
+                        <Style TargetType="Grid">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding HasNoticeMessage}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger>
+                                <DataTrigger Binding="{Binding HasErrorMessage}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Grid.Style>
+                    <Border Background="#161D2E" BorderBrush="#24304A" BorderThickness="1" CornerRadius="11" Padding="14,10"
+                            Visibility="{Binding HasNoticeMessage, Converter={StaticResource BoolToVis}}">
+                        <DockPanel LastChildFill="True">
+                            <Border DockPanel.Dock="Right" Background="#1E2B22" Width="26" Height="26" CornerRadius="13" Margin="12,0,0,0">
+                                <TextBlock Text="&#xE946;" FontFamily="Segoe MDL2 Assets" FontSize="13" Foreground="{StaticResource Good}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <TextBlock Text="{Binding NoticeMessage}" Foreground="#C9D0DE" FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center" />
+                        </DockPanel>
+                    </Border>
+                    <Border Background="#2A1A1F" BorderBrush="#5C2A33" BorderThickness="1" CornerRadius="11" Padding="14,10"
+                            Visibility="{Binding HasErrorMessage, Converter={StaticResource BoolToVis}}">
+                        <DockPanel LastChildFill="True">
+                            <Border DockPanel.Dock="Right" Background="#3A2027" Width="26" Height="26" CornerRadius="13" Margin="12,0,0,0">
+                                <TextBlock Text="&#xEA39;" FontFamily="Segoe MDL2 Assets" FontSize="13" Foreground="{StaticResource Bad}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <TextBlock Text="{Binding ErrorMessage}" Foreground="#F6C9CE" FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center" />
+                        </DockPanel>
+                    </Border>
+                </Grid>
+
+                <ContentControl Grid.Row="2" Content="{Binding Page}">
                     <ContentControl.ContentTemplate>
                         <DataTemplate>
                             <Grid>
@@ -332,8 +363,8 @@
                                         <Border Style="{StaticResource Card}">
                                             <StackPanel>
                                                 <DockPanel>
-                                                    <TextBlock Text="Service connection" Style="{StaticResource CardTitle}" />
                                                     <Button DockPanel.Dock="Right" Content="Check" Command="{Binding DataContext.RefreshBackendCommand, RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource GhostButton}" Padding="14,6" />
+                                                    <TextBlock Text="Service connection" Style="{StaticResource CardTitle}" />
                                                 </DockPanel>
                                                 <TextBlock Text="{Binding DataContext.BackendStatus, RelativeSource={RelativeSource AncestorType=Window}}" Foreground="{StaticResource Muted}" Margin="0,8,0,0" />
                                             </StackPanel>
@@ -426,21 +457,31 @@
                                                     </DockPanel>
                                                 </StackPanel>
                                             </Border>
-                                            <Border Style="{StaticResource Card}" Width="300">
+                                            <Border Grid.Column="1" Style="{StaticResource Card}" Width="300">
                                                 <StackPanel>
                                                     <TextBlock Text="Pair a second device" Style="{StaticResource CardTitle}" />
                                                     <TextBlock Text="Single-use code, expires in 5 minutes. The other device must be signed in to this account." Style="{StaticResource MutedText}" Margin="0,6,0,10" />
-                                                    <WrapPanel>
-                                                        <Button Content="Create code" Command="{Binding DataContext.CreatePairingCodeCommand, RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource PrimaryButton}" />
-                                                        <TextBlock Text="{Binding DataContext.PairingCode, RelativeSource={RelativeSource AncestorType=Window}}" FontSize="19" FontWeight="Bold" Foreground="#B8ADFF" VerticalAlignment="Center" Margin="12,0,0,0" />
-                                                    </WrapPanel>
-                                                    <Border Background="#10141F" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="10" Padding="8" HorizontalAlignment="Left" Margin="0,10,0,0">
-                                                        <Border.Style><Style TargetType="Border"><Setter Property="Visibility" Value="Collapsed" /><Style.Triggers><DataTrigger Binding="{Binding DataContext.HasPairingQr, RelativeSource={RelativeSource AncestorType=Window}}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers></Style></Border.Style>
-                                                        <Image Source="{Binding DataContext.PairingQrImage, RelativeSource={RelativeSource AncestorType=Window}, Mode=OneWay}" Width="132" Height="132" />
-                                                    </Border>
-                                                    <DockPanel Margin="0,10,0,0">
+                                                    <Button Content="Create pairing code" HorizontalAlignment="Left" Command="{Binding DataContext.CreatePairingCodeCommand, RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource PrimaryButton}" />
+                                                    <Grid Margin="0,12,0,0">
+                                                        <Grid.Style><Style TargetType="Grid"><Setter Property="Visibility" Value="Collapsed" /><Style.Triggers><DataTrigger Binding="{Binding DataContext.PairingCodeDisplay, RelativeSource={RelativeSource AncestorType=Window}}" Value=""><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers></Style></Grid.Style>
+                                                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                                        <Border Grid.Column="0" Background="#10141F" BorderBrush="#3A3468" BorderThickness="1" CornerRadius="11" Padding="11" VerticalAlignment="Top">
+                                                            <StackPanel>
+                                                                <Image Source="{Binding DataContext.PairingQrImage, RelativeSource={RelativeSource AncestorType=Window}, Mode=OneWay}" Width="140" Height="140" />
+                                                                <TextBlock Text="Scan with the other device" Foreground="{StaticResource Muted}" FontSize="10.5" HorizontalAlignment="Center" Margin="0,7,0,0" TextWrapping="Wrap" TextAlignment="Center" />
+                                                            </StackPanel>
+                                                        </Border>
+                                                        <StackPanel Grid.Column="1" Margin="14,0,0,0" VerticalAlignment="Center">
+                                                            <TextBlock Text="PAIRING CODE" Style="{StaticResource SectionLabel}" />
+                                                            <TextBlock Text="{Binding DataContext.PairingCodeDisplay, RelativeSource={RelativeSource AncestorType=Window}}" FontSize="26" FontWeight="Bold" Foreground="#B8ADFF" Margin="0,4,0,0" />
+                                                            <TextBlock Text="{Binding DataContext.PairingCodeHint, RelativeSource={RelativeSource AncestorType=Window}}" Foreground="{StaticResource Good}" FontSize="11.5" Margin="0,6,0,0" TextWrapping="Wrap" />
+                                                        </StackPanel>
+                                                    </Grid>
+                                                    <TextBlock Text="Pairing an incoming device" Style="{StaticResource SectionLabel}" Margin="0,16,0,0" />
+                                                    <TextBlock Text="Enter the eight-digit code shown on the device that is already signed in." Style="{StaticResource MutedText}" Margin="0,5,0,8" />
+                                                    <DockPanel>
                                                         <Button DockPanel.Dock="Right" Content="Pair" Command="{Binding DataContext.PairDeviceCommand, RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource PrimaryButton}" Margin="10,0,0,0" />
-                                                        <TextBox Text="{Binding DataContext.PairingCode, RelativeSource={RelativeSource AncestorType=Window}, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource InputBox}" MaxLength="8" ToolTip="Eight-digit pairing code" />
+                                                        <TextBox Text="{Binding DataContext.PairingCodeInput, RelativeSource={RelativeSource AncestorType=Window}, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource InputBox}" MaxLength="8" ToolTip="Eight-digit pairing code" />
                                                     </DockPanel>
                                                 </StackPanel>
                                             </Border>
@@ -448,8 +489,8 @@
                                         <Border Style="{StaticResource Card}">
                                             <StackPanel>
                                                 <DockPanel>
-                                                    <TextBlock Text="Registered devices" Style="{StaticResource CardTitle}" />
                                                     <Button DockPanel.Dock="Right" Content="Revoke selected" Command="{Binding DataContext.RevokeDeviceCommand, RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource DangerButton}" Padding="13,6" />
+                                                    <TextBlock Text="Registered devices" Style="{StaticResource CardTitle}" />
                                                 </DockPanel>
                                                 <ListBox ItemsSource="{Binding DataContext.Devices, RelativeSource={RelativeSource AncestorType=Window}}" SelectedItem="{Binding DataContext.SelectedDevice, RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource ListBoxBase}" Margin="0,10,0,0">
                                                     <ListBox.ItemTemplate><DataTemplate>
@@ -481,11 +522,11 @@
                                     <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                                     <Border Style="{StaticResource Card}" Padding="14" Margin="0,0,0,12">
                                         <DockPanel>
+                                            <TextBlock DockPanel.Dock="Right" Text="Authenticated SSE" Foreground="{StaticResource Good}" FontSize="11" VerticalAlignment="Center" />
                                             <StackPanel>
                                                 <TextBlock Text="{Binding DataContext.CurrentPeerName, RelativeSource={RelativeSource AncestorType=Window}}" FontWeight="SemiBold" FontSize="14" />
                                                 <TextBlock Text="{Binding DataContext.TypingStatus, RelativeSource={RelativeSource AncestorType=Window}, Mode=OneWay}" Foreground="#B8ADFF" FontSize="11" Margin="0,2,0,0" />
                                             </StackPanel>
-                                            <TextBlock DockPanel.Dock="Right" Text="Authenticated SSE" Foreground="{StaticResource Good}" FontSize="11" VerticalAlignment="Center" />
                                         </DockPanel>
                                     </Border>
                                     <ListBox Grid.Row="1" ItemsSource="{Binding DataContext.Messages, RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource ListBoxBase}" ScrollViewer.VerticalScrollBarVisibility="Auto" HorizontalContentAlignment="Stretch">
@@ -533,7 +574,7 @@
                                                     <TextBlock Text="You can also drag files onto the window at any time." Style="{StaticResource MutedText}" Margin="0,10,0,0" />
                                                 </StackPanel>
                                             </Border>
-                                            <Border Style="{StaticResource Card}" Width="300">
+                                            <Border Grid.Column="1" Style="{StaticResource Card}" Width="300">
                                                 <StackPanel>
                                                     <TextBlock Text="Incoming request" Style="{StaticResource CardTitle}" />
                                                     <TextBlock Text="{Binding DataContext.SelectedIncomingTransfer.Items[0].FileName, RelativeSource={RelativeSource AncestorType=Window}, TargetNullValue=No pending request}" Foreground="{StaticResource Muted}" Margin="0,8,0,12" TextWrapping="Wrap" />
@@ -547,15 +588,15 @@
                                         <Border Style="{StaticResource Card}">
                                             <StackPanel>
                                                 <DockPanel>
-                                                    <TextBlock Text="Transfer activity" Style="{StaticResource CardTitle}" />
                                                     <Border DockPanel.Dock="Right" Style="{StaticResource StatusPill}">
                                                         <TextBlock Text="{Binding DataContext.ActiveTransportLabel, RelativeSource={RelativeSource AncestorType=Window}, Mode=OneWay}" Style="{StaticResource StatusText}" />
                                                     </Border>
+                                                    <TextBlock Text="Transfer activity" Style="{StaticResource CardTitle}" />
                                                 </DockPanel>
                                                 <ProgressBar Value="{Binding DataContext.TransferPercent, RelativeSource={RelativeSource AncestorType=Window}, Mode=OneWay}" Maximum="100" Style="{StaticResource ProgressStyle}" Margin="0,14,0,7" />
                                                 <DockPanel>
-                                                    <TextBlock Text="{Binding DataContext.TransferSpeed, RelativeSource={RelativeSource AncestorType=Window}, Mode=OneWay}" Foreground="{StaticResource Muted}" FontSize="12" />
                                                     <TextBlock DockPanel.Dock="Right" Text="{Binding DataContext.TransferEta, RelativeSource={RelativeSource AncestorType=Window}, Mode=OneWay, StringFormat=ETA {0}}" Foreground="{StaticResource Muted}" FontSize="12" />
+                                                    <TextBlock Text="{Binding DataContext.TransferSpeed, RelativeSource={RelativeSource AncestorType=Window}, Mode=OneWay}" Foreground="{StaticResource Muted}" FontSize="12" />
                                                 </DockPanel>
                                                 <WrapPanel Margin="0,13,0,0">
                                                     <Button Content="Pause" Command="{Binding DataContext.PauseTransferCommand, RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource GhostButton}" Margin="0,0,8,8" />
@@ -657,7 +698,7 @@
                     </ContentControl.ContentTemplate>
                 </ContentControl>
 
-                <TextBlock Grid.Row="2" Text="{Binding BackendStatus}" Foreground="#6E7789" FontSize="10.5" Margin="0,14,0,0" />
+                <TextBlock Grid.Row="3" Text="{Binding BackendStatus}" Foreground="#6E7789" FontSize="10.5" Margin="0,14,0,0" />
             </Grid>
         </Grid>
     </Grid>

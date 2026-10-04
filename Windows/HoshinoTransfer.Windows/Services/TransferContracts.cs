@@ -250,28 +250,34 @@ public sealed class TransferManager(ApiClient api, TransferTransportRegistry tra
         {
             transports.Relay.SpeedFactor = 0.7;
         }
-        else if (preference is TransferPreference.Auto or TransferPreference.P2P && transports.P2P.IsAvailable)
+        else
         {
-            try
+            // Auto order: P2P (UDP hole punch) -> Direct Wi-Fi (shared LAN) -> Server Relay.
+            if ((preference is TransferPreference.Auto or TransferPreference.P2P) && transports.P2P.IsAvailable)
             {
-                var done = await transports.P2P.UploadAcceptedAsync(transfer, sources, progress, cancellationToken);
-                if (done.Status == "Completed" && done.Transport == P2PTransport.TransportName) return done;
+                try
+                {
+                    var done = await transports.P2P.UploadAcceptedAsync(transfer, sources, progress, cancellationToken);
+                    if (done.Status == "Completed" && done.Transport == P2PTransport.TransportName) return done;
+                }
+                catch (Exception ex) when (!cancellationToken.IsCancellationRequested
+                    && (ex is IOException or InvalidOperationException or HttpRequestException or TimeoutException))
+                {
+                    // punch failed or the peer asked for the relay: continue below
+                }
             }
-            catch (Exception ex) when (ex is IOException or InvalidOperationException or HttpRequestException or TimeoutException && !cancellationToken.IsCancellationRequested)
+            if ((preference is TransferPreference.Auto or TransferPreference.DirectWifi) && transports.Direct.IsAvailable)
             {
-                // punch failed or the peer asked for the relay: continue below
-            }
-        }
-        if (preference is TransferPreference.Auto or TransferPreference.DirectWifi && transports.SelectPreferred(preference is TransferPreference.P2P ? TransferPreference.Auto : preference) is DirectWifiTransport direct)
-        {
-            try
-            {
-                var done = await direct.UploadAcceptedAsync(transfer, sources, progress, cancellationToken);
-                if (done.Status == "Completed" && done.Transport == DirectWifiTransport.TransportName) return done;
-            }
-            catch (Exception ex) when (ex is IOException or InvalidOperationException or HttpRequestException && !cancellationToken.IsCancellationRequested)
-            {
-                // fall through to the pure relay path below
+                try
+                {
+                    var done = await transports.Direct.UploadAcceptedAsync(transfer, sources, progress, cancellationToken);
+                    if (done.Status == "Completed" && done.Transport == DirectWifiTransport.TransportName) return done;
+                }
+                catch (Exception ex) when (!cancellationToken.IsCancellationRequested
+                    && (ex is IOException or InvalidOperationException or HttpRequestException))
+                {
+                    // fall through to the pure relay path below
+                }
             }
         }
 
