@@ -265,7 +265,7 @@ final class SessionStore: ObservableObject {
                 saved = try await downloadDirect(transfer: current, direct: direct, host: host, port: port, to: folder)
                 _ = try await api.completeDirectTransfer(transfer.id)
             } else {
-                try await api.requestRelayFallback(transfer.id)
+                try await api.requestRelayFallback(transferId: transfer.id)
                 let completed = try await waitForTransfer(transfer.id, terminal: ["Completed", "Failed", "Cancelled"])
                 guard completed.status == "Completed" else { throw APIClientError.transferState(completed.status) }
                 for item in completed.items {
@@ -297,7 +297,7 @@ final class SessionStore: ObservableObject {
             var offset = 0
             while offset < item.size {
                 try Task.checkCancellation()
-                let length = min(chunkSize, item.size - offset)
+                let length = Int(min(Int64(chunkSize), item.size - Int64(offset)))
                 let index = offset / chunkSize
                 let urlString = "http://\(host):\(port)/hoshino/\(transfer.id)/\(item.id)/\(index)?token=\(token)"
                 guard let url = URL(string: urlString) else { throw APIClientError.invalidResponse }
