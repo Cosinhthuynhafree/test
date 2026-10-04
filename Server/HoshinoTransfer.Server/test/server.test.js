@@ -204,6 +204,49 @@ test('health, auth, friend requests, chat events, transfer integrity, and access
     assert.equal(crypto.createHash('sha256').update(downloaded.data).digest('hex'), fileHash);
   }
 
+  const directTransfer = await request('/api/v1/transfers/create', {
+    method: 'POST', token: aliceToken,
+    body: { receiverId: bob.id, items: [{ fileName: 'direct.bin', size: bytes.length, mimeType: 'text/plain', sha256: fileHash }] },
+  });
+  const direct = directTransfer.data.transfer;
+  const directByReceiver = await request(`/api/v1/transfers/${direct.id}/direct`, {
+    method: 'POST', token: bobToken, body: { host: '192.168.1.10', port: 52317, token: 'a'.repeat(64) },
+  });
+  assert.equal(directByReceiver.response.status, 403, 'only the sender registers a direct endpoint');
+  await request(`/api/v1/transfers/${direct.id}/accept`, { method: 'POST', token: bobToken });
+  const directRegister = await request(`/api/v1/transfers/${direct.id}/direct`, {
+    method: 'POST', token: aliceToken, body: { host: '192.168.1.10', port: 52317, token: 'a'.repeat(64) },
+  });
+  assert.equal(directRegister.response.status, 200);
+  const directView = await request(`/api/v1/transfers/${direct.id}`, { token: bobToken });
+  assert.equal(directView.data.transfer.directInfo.host, '192.168.1.10');
+  assert.equal(directView.data.transfer.directInfo.token, 'a'.repeat(64), 'the receiver receives the capability token over TLS');
+  const senderView = await request(`/api/v1/transfers/${direct.id}`, { token: aliceToken });
+  assert.equal(senderView.data.transfer.directInfo.token, undefined, 'the sender already knows the token; it is not echoed back');
+
+  const senderCompleteDirect = await request(`/api/v1/transfers/${direct.id}/complete-direct`, { method: 'POST', token: aliceToken });
+  assert.equal(senderCompleteDirect.response.status, 409, 'only the receiver completes a direct transfer');
+  const completedDirect = await request(`/api/v1/transfers/${direct.id}/complete-direct`, { method: 'POST', token: bobToken });
+  assert.equal(completedDirect.response.status, 200);
+  assert.equal(completedDirect.data.transfer.status, 'Completed');
+  assert.equal(completedDirect.data.transfer.transport, 'Direct Wi-Fi', 'the completed transfer reports the transport that actually moved the bytes');
+
+  const fallbackTransfer = await request('/api/v1/transfers/create', {
+    method: 'POST', token: aliceToken,
+    body: { receiverId: bob.id, items: [{ fileName: 'fallback.bin', size: bytes.length, mimeType: 'text/plain', sha256: fileHash }] },
+  });
+  const fallback = fallbackTransfer.data.transfer;
+  await request(`/api/v1/transfers/${fallback.id}/accept`, { method: 'POST', token: bobToken });
+  const senderFallback = await request(`/api/v1/transfers/${fallback.id}/fallback-relay`, { method: 'POST', token: aliceToken });
+  assert.equal(senderFallback.response.status, 409, 'only the receiver requests the relay fallback');
+  const receiverFallback = await request(`/api/v1/transfers/${fallback.id}/fallback-relay`, { method: 'POST', token: bobToken });
+  assert.equal(receiverFallback.response.status, 200);
+  const progressAfterFallback = await request(`/api/v1/transfers/${fallback.id}/progress`, { token: bobToken });
+  assert.equal(progressAfterFallback.data.relayRequested, true);
+  const failed = await request(`/api/v1/transfers/${fallback.id}/fail`, { method: 'POST', token: aliceToken, body: { reason: 'direct_channel_unreachable' } });
+  assert.equal(failed.response.status, 200);
+  assert.equal(failed.data.transfer.status, 'Failed');
+
   result = await request(`/api/v1/transfers/${transfer.id}`, { token: 'not-a-valid-token' });
   assert.equal(result.response.status, 401);
   result = await request('/api/v1/auth/logout', { method: 'POST', token: aliceToken });

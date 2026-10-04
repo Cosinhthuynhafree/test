@@ -76,6 +76,12 @@ struct ChatMessage: Codable, Identifiable {
 struct TransfersResponse: Decodable { let transfers: [TransferRecord] }
 struct TransferEnvelope: Decodable { let transfer: TransferRecord }
 struct TransferCreateResponse: Decodable { let transfer: TransferRecord; let chunkSize: Int; let transport: String }
+struct DirectEndpointInfo: Codable {
+    let host: String
+    let port: Int?
+    let token: String?
+}
+
 struct TransferRecord: Codable, Identifiable {
     let id: String
     let senderId: String
@@ -84,6 +90,8 @@ struct TransferRecord: Codable, Identifiable {
     let transport: String
     let expiresAt: String
     let chunkSize: Int?
+    let directInfo: DirectEndpointInfo?
+    let relayRequested: Bool?
     let items: [TransferItem]
 }
 struct TransferItem: Codable, Identifiable {
@@ -310,6 +318,35 @@ final class APIClient {
     func transferAction(_ id: String, action: String) async throws -> TransferRecord {
         let envelope: TransferEnvelope = try await send("api/v1/transfers/\(id)/\(action)", method: "POST", body: Data("{}".utf8))
         return envelope.transfer
+    }
+
+    func registerDirectEndpoint(transferId: String, host: String, port: Int, token: String) async throws {
+        struct Body: Encodable { let host: String; let port: Int; let token: String }
+        try await sendEmpty("api/v1/transfers/\(transferId)/direct", method: "POST", body: try JSONEncoder().encode(Body(host: host, port: port, token: token)))
+    }
+
+    func requestRelayFallback(transferId: String) async throws {
+        try await sendEmpty("api/v1/transfers/\(transferId)/fallback-relay", method: "POST", body: Data("{}".utf8))
+    }
+
+    func completeDirectTransfer(_ id: String) async throws -> TransferRecord {
+        let envelope: TransferEnvelope = try await send("api/v1/transfers/\(id)/complete-direct", method: "POST", body: Data("{}".utf8))
+        return envelope.transfer
+    }
+
+    func failTransfer(_ id: String, reason: String) async throws -> TransferRecord {
+        struct Body: Encodable { let reason: String }
+        let envelope: TransferEnvelope = try await send("api/v1/transfers/\(id)/fail", method: "POST", body: try JSONEncoder().encode(Body(reason: reason)))
+        return envelope.transfer
+    }
+
+    func downloadDirectChunk(url: URL) async throws -> Data {
+        try await ensureFreshToken()
+        let request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw APIClientError.invalidResponse }
+        guard (200..<300).contains(http.statusCode) else { throw APIClientError.server(http.statusCode, "Direct chunk request failed.") }
+        return data
     }
 
     func uploadAcceptedTransfer(_ transfer: TransferRecord, sourceURLs: [URL], onProgress: @MainActor (Double, Double, TimeInterval?) -> Void) async throws -> TransferRecord {

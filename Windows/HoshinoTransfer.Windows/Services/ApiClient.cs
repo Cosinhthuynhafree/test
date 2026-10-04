@@ -254,6 +254,25 @@ public sealed class ApiClient : IDisposable
     public async Task<TransferDto> RetryTransferAsync(string transferId, CancellationToken ct = default)
         => (await SendJsonAsync<object, TransferEnvelope>(HttpMethod.Post, $"api/v1/transfers/{Uri.EscapeDataString(transferId)}/retry", new { }, ct)).Transfer;
 
+    public async Task RegisterDirectEndpointAsync(string transferId, string host, int port, string token, CancellationToken ct = default)
+        => _ = await SendJsonAsync<object, JsonElement>(HttpMethod.Post, $"api/v1/transfers/{Uri.EscapeDataString(transferId)}/direct", new { host, port, token }, ct);
+
+    public async Task RequestRelayFallbackAsync(string transferId, CancellationToken ct = default)
+        => _ = await SendJsonAsync<object, JsonElement>(HttpMethod.Post, $"api/v1/transfers/{Uri.EscapeDataString(transferId)}/fallback-relay", new { }, ct);
+
+    public async Task<TransferDto> CompleteDirectTransferAsync(string transferId, CancellationToken ct = default)
+        => (await SendJsonAsync<object, TransferEnvelope>(HttpMethod.Post, $"api/v1/transfers/{Uri.EscapeDataString(transferId)}/complete-direct", new { }, ct)).Transfer;
+
+    public async Task<TransferDto> FailTransferAsync(string transferId, string reason, CancellationToken ct = default)
+        => (await SendJsonAsync<object, TransferEnvelope>(HttpMethod.Post, $"api/v1/transfers/{Uri.EscapeDataString(transferId)}/fail", new { reason }, ct)).Transfer;
+
+    public async Task<Stream> DownloadDirectChunkAsync(string url, CancellationToken ct = default)
+    {
+        var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
+        if (!response.IsSuccessStatusCode) throw await ReadApiExceptionAsync(response, ct);
+        return await response.Content.ReadAsStreamAsync(ct);
+    }
+
     public async Task UploadChunkAsync(string transferId, string itemId, int index, Stream content, long length, CancellationToken ct = default)
     {
         await EnsureFreshSessionAsync(ct);

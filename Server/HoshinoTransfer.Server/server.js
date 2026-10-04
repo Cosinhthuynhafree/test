@@ -159,9 +159,18 @@ function transferRecord(transferId, userId) {
   const transfer = db.get('SELECT * FROM transfers WHERE id=? AND (sender_id=? OR receiver_id=?)', [transferId, userId, userId]);
   if (!transfer) fail(404, 'Transfer not found.', 'not_found');
   const items = db.all('SELECT i.*,COALESCE((SELECT SUM(c.size) FROM transfer_chunks c WHERE c.item_id=i.id),0) AS received_bytes FROM transfer_items i WHERE i.transfer_id=? ORDER BY i.created_at', [transferId]);
+  let directInfo = null;
+  if (transfer.direct_info) {
+    try {
+      const registered = JSON.parse(transfer.direct_info);
+      directInfo = { host: registered.host, port: registered.port };
+      if (userId === transfer.receiver_id) directInfo.token = registered.token;
+    } catch { directInfo = null; }
+  }
   return {
     id: transfer.id, senderId: transfer.sender_id, receiverId: transfer.receiver_id, status: transfer.status,
     transport: transfer.transport, expiresAt: iso(transfer.expires_at), createdAt: iso(transfer.created_at), chunkSize: CHUNK_SIZE,
+    directInfo, relayRequested: Boolean(transfer.relay_requested),
     items: items.map((item) => {
       const nextChunkIndex = db.get('SELECT COUNT(*) AS count FROM transfer_chunks WHERE item_id=?', [item.id]).count;
       return { id: item.id, fileName: item.file_name, size: item.size, mimeType: item.mime_type, sha256: item.sha256,
@@ -639,7 +648,7 @@ async function route(req, res, pathname, searchParams) {
     const record = transferRecord(transfer.id, user.user_id);
     const totalBytes = record.items.reduce((sum, item) => sum + item.size, 0);
     const receivedBytes = record.items.reduce((sum, item) => sum + item.receivedBytes, 0);
-    return sendJson(res, 200, { transferId: transfer.id, status: transfer.status, transport: 'Server Relay', chunkSize: CHUNK_SIZE, totalBytes, receivedBytes, items: record.items.map((item) => ({ itemId: item.id, fileName: item.fileName, size: item.size, receivedBytes: item.receivedBytes, nextChunkIndex: item.nextChunkIndex, chunkCount: Math.ceil(item.size / CHUNK_SIZE) })) });
+    return sendJson(res, 200, { transferId: transfer.id, status: transfer.status, transport: transfer.transport, chunkSize: CHUNK_SIZE, totalBytes, receivedBytes, directInfo: record.directInfo, relayRequested: record.relayRequested, items: record.items.map((item) => ({ itemId: item.id, fileName: item.fileName, size: item.size, receivedBytes: item.receivedBytes, nextChunkIndex: item.nextChunkIndex, chunkCount: Math.ceil(item.size / CHUNK_SIZE) })) });
   }
 
   match = new RegExp(`^${API}/transfers/([0-9a-f-]{36})/retry$`).exec(pathname);
@@ -657,6 +666,64 @@ async function route(req, res, pathname, searchParams) {
     const retry = transferRecord(id, user.user_id);
     emit(prior.receiver_id, 'transfer.request', retry);
     return sendJson(res, 201, { transfer: retry, chunkSize: CHUNK_SIZE, transport: 'Server Relay', retryOf: prior.id });
+  }
+
+  match = new RegExp(`^${API}/transfers/([0-9a-f-]{36})/direct$`).exec(pathname);
+  if (req.method === 'POST' && match) {
+    const transfer = ownedTransfer(match[1], user.user_id);
+    if (transfer.sender_id !== user.user_id) fail(403, 'Only the sender may register a direct endpoint.', 'forbidden');
+    if (transfer.status !== 'Transferring') fail(409, 'Direct endpoints are registered after the receiver accepts.', 'invalid_transfer_state');
+    const body = await readJson(req);
+    const host = typeof body.host === 'string' ? body.host.trim() : '';
+    const port = Number(body.port);
+    const token = typeof body.token === 'string' ? body.token : '';
+    if (!host || host.length > 253 || !/^[A-Za-z0-9._-]+$/.test(host)) fail(400, 'A valid LAN host is required.', 'invalid_direct_host');
+    if (!Number.isInteger(port) || port < 1 || port > 65535) fail(400, 'A valid LAN port is required.', 'invalid_direct_port');
+    if (token.length < 32 || token.length > 128 || !/^[a-f0-9]+$/.test(token)) fail(400, 'A direct capability token is required.', 'invalid_direct_token');
+    db.run('UPDATE transfers SET direct_info=?,updated_at=? WHERE id=?', [JSON.stringify({ host, port, token }), Date.now(), transfer.id]);
+    emit(transfer.receiver_id, 'transfer.direct', { transferId: transfer.id, host, port });
+    return sendJson(res, 200, { status: 'registered' });
+  }
+
+  match = new RegExp(`^${API}/transfers/([0-9a-f-]{36})/fallback-relay$`).exec(pathname);
+  if (req.method === 'POST' && match) {
+    const transfer = ownedTransfer(match[1], user.user_id);
+    if (transfer.receiver_id !== user.user_id || transfer.status !== 'Transferring') fail(409, 'Only the receiver may request the relay fallback.', 'invalid_transfer_state');
+    db.run('UPDATE transfers SET relay_requested=1,updated_at=? WHERE id=?', [Date.now(), transfer.id]);
+    emit(transfer.sender_id, 'transfer.fallback', { transferId: transfer.id });
+    return sendJson(res, 200, { status: 'relay_requested' });
+  }
+
+  match = new RegExp(`^${API}/transfers/([0-9a-f-]{36})/complete-direct$`).exec(pathname);
+  if (req.method === 'POST' && match) {
+    const transfer = ownedTransfer(match[1], user.user_id);
+    if (transfer.receiver_id !== user.user_id || transfer.status !== 'Transferring') fail(409, 'Only the receiver may complete a direct transfer.', 'invalid_transfer_state');
+    if (!transfer.direct_info) fail(409, 'No direct endpoint was registered for this transfer.', 'no_direct_channel');
+    db.transaction(() => {
+      db.run("UPDATE transfer_items SET status='Completed' WHERE transfer_id=?", [transfer.id]);
+      db.run("UPDATE transfers SET status='Completed',transport='Direct Wi-Fi',updated_at=? WHERE id=?", [Date.now(), transfer.id]);
+    });
+    db.run('DELETE FROM transfer_chunks WHERE transfer_id=?', [transfer.id]);
+    removeTransferFiles(transfer.id);
+    emit(transfer.sender_id, 'transfer.completed', { transferId: transfer.id, transport: 'Direct Wi-Fi' });
+    return sendJson(res, 200, { transfer: transferRecord(transfer.id, user.user_id) });
+  }
+
+  match = new RegExp(`^${API}/transfers/([0-9a-f-]{36})/fail$`).exec(pathname);
+  if (req.method === 'POST' && match) {
+    const transfer = ownedTransfer(match[1], user.user_id);
+    if (!['Transferring', 'Paused'].includes(transfer.status)) fail(409, 'This transfer cannot be marked failed now.', 'invalid_transfer_state');
+    const body = await readJson(req);
+    const reason = typeof body.reason === 'string' && body.reason.length <= 200 ? body.reason : 'direct_transfer_failed';
+    db.transaction(() => {
+      db.run("UPDATE transfers SET status='Failed',updated_at=? WHERE id=?", [Date.now(), transfer.id]);
+      db.run("UPDATE transfer_items SET status='Failed' WHERE transfer_id=?", [transfer.id]);
+    });
+    db.run('DELETE FROM transfer_chunks WHERE transfer_id=?', [transfer.id]);
+    removeTransferFiles(transfer.id);
+    const peer = transfer.sender_id === user.user_id ? transfer.receiver_id : transfer.sender_id;
+    emit(peer, 'transfer.failed', { transferId: transfer.id, reason });
+    return sendJson(res, 200, { transfer: transferRecord(transfer.id, user.user_id) });
   }
 
   match = new RegExp(`^${API}/transfers/([0-9a-f-]{36})/(accept|decline|cancel|pause|resume|complete)$`).exec(pathname);

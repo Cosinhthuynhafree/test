@@ -42,14 +42,43 @@ public static class SelfTest
         try
         {
             var registry = new TransferTransportRegistry(client);
-            var relay = registry.SelectAutomatic();
+            var relay = registry.Get(TransferMode.ServerRelay);
+            var direct = registry.Get(TransferMode.DirectWifi);
             var requiredModes = new[] { TransferMode.P2P, TransferMode.DirectWifi, TransferMode.ServerRelay, TransferMode.Lightning };
             var allPresent = requiredModes.All(mode => registry.All.Any(item => item.Mode == mode));
-            if (allPresent && relay.Mode == TransferMode.ServerRelay && relay.IsAvailable && registry.Get(TransferMode.P2P).IsAvailable == false && registry.Get(TransferMode.DirectWifi).IsAvailable == false && registry.Get(TransferMode.Lightning).IsAvailable == false)
-                Pass("Transport registry and truthful fallback");
+            var lanIp = LanTransferListener.GetLocalIPv4();
+            var directShouldBeAvailable = lanIp is not null && direct.IsAvailable;
+            var directShouldBeUnavailable = lanIp is null && !direct.IsAvailable;
+            var automatic = registry.SelectAutomatic().Mode;
+            var expectedAutomatic = direct.IsAvailable ? TransferMode.DirectWifi : TransferMode.ServerRelay;
+            if (allPresent && relay.IsAvailable && registry.Get(TransferMode.P2P).IsAvailable == false
+                && registry.Get(TransferMode.Lightning).IsAvailable == false
+                && (directShouldBeAvailable || directShouldBeUnavailable)
+                && automatic == expectedAutomatic)
+                Pass($"Transport registry and truthful fallback (Direct Wi-Fi {(direct.IsAvailable ? $"available on {lanIp}" : "unavailable")})");
             else Fail("Transport registry", "transport availability is inconsistent");
         }
         catch (Exception ex) { Fail("Transport registry", ex.Message); }
+
+        try
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "hoshino-selftest-lan");
+            Directory.CreateDirectory(directory);
+            var payload = System.Text.Encoding.UTF8.GetBytes("direct wifi chunk payload".PadRight(64, '.'));
+            var path = Path.Combine(directory, "item.bin");
+            File.WriteAllBytes(path, payload);
+            using var listener = new LanTransferListener();
+            listener.Publish("selftest-item", new TransferSource("selftest-item", "item.bin", path, payload.Length));
+            listener.Start();
+            using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            var url = $"http://127.0.0.1:{listener.Port}/hoshino/transfer/selftest-item/0?token={listener.Token}";
+            var fetched = await httpClient.GetByteArrayAsync(url);
+            var forbidden = await httpClient.GetAsync($"http://127.0.0.1:{listener.Port}/hoshino/transfer/selftest-item/0?token=deadbeef");
+            listener.Stop();
+            if (fetched.SequenceEqual(payload) && forbidden.StatusCode == HttpStatusCode.Forbidden) Pass("LAN direct listener serves chunks and rejects bad tokens");
+            else Fail("LAN direct listener", $"payload match: {fetched.SequenceEqual(payload)}, bad-token status: {forbidden.StatusCode}");
+        }
+        catch (Exception ex) { Fail("LAN direct listener", ex.Message); }
 
         try
         {
@@ -66,7 +95,7 @@ public static class SelfTest
         else Fail("Endpoint configuration", "API URL is not absolute HTTP(S)");
 
         Console.WriteLine("[INFO] Password register/login/logout, friend operations, SSE exchange, and transfer authorization require a user session and are exercised by the server integration suite.");
-        Console.WriteLine("[INFO] Direct Wi-Fi, P2P, and Lightning are deliberately unavailable; selected transport is Server Relay.");
+        Console.WriteLine("[INFO] Direct Wi-Fi serves chunks over the LAN and falls back to the Server Relay; cross-network P2P and Lightning cable stay unavailable (no TURN service / no MFi entitlement).");
         Console.WriteLine(failures == 0 ? "SELF-TEST: all local capability checks passed." : $"SELF-TEST FAILED: {failures} check(s) failed.");
         return failures == 0 ? 0 : 2;
     }

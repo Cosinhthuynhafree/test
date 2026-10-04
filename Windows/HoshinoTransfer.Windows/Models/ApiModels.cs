@@ -63,6 +63,13 @@ public sealed class MessageDto
     public bool IsOwn { get; set; }
 }
 
+public sealed class DirectEndpointInfo
+{
+    public string Host { get; set; } = "";
+    public int? Port { get; set; }
+    public string? Token { get; set; }
+}
+
 public sealed class TransfersResponse { public List<TransferDto> Transfers { get; set; } = []; }
 public sealed class TransferEnvelope { public TransferDto Transfer { get; set; } = new(); }
 public sealed class TransferCreateEnvelope
@@ -80,6 +87,8 @@ public sealed class TransferDto
     public string Transport { get; set; } = "";
     public string ExpiresAt { get; set; } = "";
     public int ChunkSize { get; set; } = 4 * 1024 * 1024;
+    public DirectEndpointInfo? DirectInfo { get; set; }
+    public bool RelayRequested { get; set; }
     public List<TransferItemDto> Items { get; set; } = [];
 }
 public sealed class TransferItemDto

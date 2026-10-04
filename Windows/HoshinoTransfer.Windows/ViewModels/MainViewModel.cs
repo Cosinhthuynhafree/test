@@ -135,7 +135,15 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public string CurrentUserId => _currentUserId;
     public string CurrentChatId { get => _currentChatId; private set => Set(ref _currentChatId, value); }
     public string CurrentPeerName { get => _currentPeerName; private set => Set(ref _currentPeerName, value); }
-    public string SelectedTransferId { get => _selectedTransferId; set { if (Set(ref _selectedTransferId, value)) { CancelTransferCommand.NotifyCanExecuteChanged(); PauseTransferCommand.NotifyCanExecuteChanged(); ResumeTransferCommand.NotifyCanExecuteChanged(); RetryTransferCommand.NotifyCanExecuteChanged(); } } }
+    public string SelectedTransferId { get => _selectedTransferId; set { if (Set(ref _selectedTransferId, value)) { CancelTransferCommand.NotifyCanExecuteChanged(); PauseTransferCommand.NotifyCanExecuteChanged(); ResumeTransferCommand.NotifyCanExecuteChanged(); RetryTransferCommand.NotifyCanExecuteChanged(); OnPropertyChanged(nameof(ActiveTransportLabel)); } } }
+    public string ActiveTransportLabel
+    {
+        get
+        {
+            var transfer = Transfers.FirstOrDefault(item => item.Id == SelectedTransferId) ?? SelectedIncomingTransfer;
+            return string.IsNullOrWhiteSpace(transfer?.Transport) ? "Direct Wi-Fi / Server Relay" : transfer.Transport;
+        }
+    }
     public DeviceDto? SelectedDevice { get => _selectedDevice; set { if (Set(ref _selectedDevice, value)) RevokeDeviceCommand.NotifyCanExecuteChanged(); } }
     public UserDto? SelectedSearchUser { get => _selectedSearchUser; set { if (Set(ref _selectedSearchUser, value)) AddSearchResultCommand.NotifyCanExecuteChanged(); } }
     public FriendDto? SelectedFriend
@@ -695,7 +703,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             TransferEta = value.Remaining is null ? "—" : FormatDuration(value.Remaining.Value);
             NoticeMessage = $"{value.FileName} · Server Relay · {value.TransferredBytes:N0}/{value.TotalBytes:N0} bytes";
         });
-        var completed = await _transferManager.UploadAcceptedAsync(transfer, paths, progress, _lifetime.Token);
+        var completed = await _transferManager.UploadAcceptedWithTransportAsync(transfer, paths, progress, _lifetime.Token);
         ReplaceTransfer(completed);
         _sourceStore.Remove(transfer.Id);
         TransferPercent = 100; TransferSpeed = "—"; TransferEta = "0 sec";
@@ -734,6 +742,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     {
         var index = Transfers.ToList().FindIndex(item => item.Id == transfer.Id);
         if (index >= 0) Transfers[index] = transfer; else Transfers.Insert(0, transfer);
+        OnPropertyChanged(nameof(ActiveTransportLabel));
     }
 
     private static string FormatSpeed(double bytesPerSecond) => bytesPerSecond switch
@@ -764,13 +773,13 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             Navigate("Transfer");
             IsBusy = false;
             NoticeMessage = "Accepted · waiting for the sender to complete the Server Relay upload.";
-            var final = await WaitForTransferStateAsync(transfer, new HashSet<string>(StringComparer.Ordinal) { "Completed", "Failed", "Cancelled" });
-            if (final.Status != "Completed") throw new ApiException($"Transfer ended with status {final.Status}.", System.Net.HttpStatusCode.Conflict);
+            var final = await WaitForTransferStateAsync(transfer, new HashSet<string>(StringComparer.Ordinal) { "Transferring" });
+            if (final.Status != "Transferring") throw new ApiException($"Transfer ended with status {final.Status}.", System.Net.HttpStatusCode.Conflict);
             IsBusy = true;
             var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "HoshinoTransfer");
-            await _transferManager.DownloadAsync(final, folder, _lifetime.Token);
+            var saved = await _transferManager.DownloadWithTransportAsync(final, folder, null, _lifetime.Token);
             await RefreshDataAsync();
-            NoticeMessage = $"Received and SHA-256 verified · Server Relay · {folder}";
+            NoticeMessage = $"Received and SHA-256 verified · {final.Transport} · {folder}";
         }
         catch (Exception ex) when (ex is ApiException or HttpRequestException or TaskCanceledException or IOException or UnauthorizedAccessException or TimeoutException)
         {

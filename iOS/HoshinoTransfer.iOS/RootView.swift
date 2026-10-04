@@ -481,8 +481,8 @@ struct SettingsView: View {
                 .disabled(checking)
             }
             Section("Transfers") {
-                LabeledContent("Actual mode", value: "Server Relay")
-                Text("Direct Wi-Fi, P2P and Lightning are unavailable in this build and are never reported as active.")
+                LabeledContent("Preferred mode", value: "Direct Wi-Fi")
+                Text("Bytes move device-to-device when both sides share a LAN, and fall back to the Server Relay automatically. Cross-network P2P and Lightning cable are unavailable and are never reported as active.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("About") {

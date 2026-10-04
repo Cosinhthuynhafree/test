@@ -25,6 +25,11 @@ const migrations = [
       code_hash TEXT NOT NULL, expires_at INTEGER NOT NULL, used_at INTEGER, created_at INTEGER NOT NULL
     ); CREATE INDEX IF NOT EXISTS idx_pairing_user ON pairing_tokens(user_id, expires_at);`);
   } },
+  { version: 3, name: 'direct-wifi-transport', up: () => {
+    const transferColumns = new Set(db.prepare('PRAGMA table_info(transfers)').all().map((column) => column.name));
+    if (!transferColumns.has('direct_info')) db.exec('ALTER TABLE transfers ADD COLUMN direct_info TEXT');
+    if (!transferColumns.has('relay_requested')) db.exec('ALTER TABLE transfers ADD COLUMN relay_requested INTEGER NOT NULL DEFAULT 0');
+  } },
 ];
 for (const migration of migrations) {
   if (db.prepare('SELECT 1 FROM schema_migrations WHERE version=?').get(migration.version)) continue;

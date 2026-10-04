@@ -11,6 +11,7 @@
 		100000000000000000000003 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000003 /* RootView.swift */; };
 		100000000000000000000004 /* SessionKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000006 /* SessionKeychain.swift */; };
 		100000000000000000000005 /* QRCameraScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000007 /* QRCameraScanner.swift */; };
+		100000000000000000000006 /* LanTransferServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000008 /* LanTransferServer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -20,6 +21,7 @@
 		200000000000000000000004 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		200000000000000000000006 /* SessionKeychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionKeychain.swift; sourceTree = "<group>"; };
 		200000000000000000000007 /* QRCameraScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRCameraScanner.swift; sourceTree = "<group>"; };
+		200000000000000000000008 /* LanTransferServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanTransferServer.swift; sourceTree = "<group>"; };
 		200000000000000000000005 /* HoshinoTransfer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = HoshinoTransfer.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -44,6 +46,7 @@
 				200000000000000000000003 /* RootView.swift */,
 				200000000000000000000006 /* SessionKeychain.swift */,
 				200000000000000000000007 /* QRCameraScanner.swift */,
+				200000000000000000000008 /* LanTransferServer.swift */,
 				200000000000000000000004 /* Info.plist */,
 			);
 			sourceTree = "<group>";
@@ -105,6 +108,7 @@
 			100000000000000000000003 /* RootView.swift in Sources */,
 			100000000000000000000004 /* SessionKeychain.swift in Sources */,
 			100000000000000000000005 /* QRCameraScanner.swift in Sources */,
+			100000000000000000000006 /* LanTransferServer.swift in Sources */,
 		); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 

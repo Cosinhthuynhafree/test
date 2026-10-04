@@ -133,11 +133,12 @@ public sealed class TransferTransportRegistry
     private readonly IReadOnlyList<ITransferTransport> _transports;
     public TransferTransportRegistry(ApiClient api)
     {
+        var relay = new ServerRelayTransport(api);
         _transports = [
-            new UnavailableTransferTransport(TransferMode.P2P, "No ICE/STUN/TURN peer transport is configured."),
-            new UnavailableTransferTransport(TransferMode.DirectWifi, "No local discovery or authenticated direct socket adapter is configured."),
-            new ServerRelayTransport(api),
-            new UnavailableTransferTransport(TransferMode.Lightning, "No supported iOS cable transfer API is available to this Windows client."),
+            new UnavailableTransferTransport(TransferMode.P2P, "Cross-network P2P needs a signaling/TURN service that is not configured."),
+            new DirectWifiTransport(api, relay),
+            relay,
+            new UnavailableTransferTransport(TransferMode.Lightning, "Apple requires the MFi External Accessory entitlement; it is not available to unsigned sideloads."),
         ];
     }
 
@@ -179,7 +180,6 @@ public sealed class TransferManager(ApiClient api, TransferTransportRegistry tra
         var completedBytes = sources.Sum(source => source.Size);
         var totalBytes = Math.Max(1, completedBytes);
         var doneBytes = 0L;
-        var uploadStopwatch = System.Diagnostics.Stopwatch.StartNew();
         foreach (var source in sources)
         {
             var before = doneBytes;
@@ -195,6 +195,73 @@ public sealed class TransferManager(ApiClient api, TransferTransportRegistry tra
             doneBytes = before + source.Size;
         }
         return await api.CompleteTransferAsync(transfer.Id, cancellationToken);
+    }
+
+    /// <summary>Sender flow that supports the Direct Wi-Fi channel with automatic relay fallback.</summary>
+    public async Task<TransferDto> UploadAcceptedWithTransportAsync(TransferDto transfer, IReadOnlyList<string> sourcePaths,
+        IProgress<TransferProgress>? progress, CancellationToken cancellationToken)
+    {
+        if (sourcePaths.Count != transfer.Items.Count) throw new InvalidOperationException("Selected source files no longer match transfer items.");
+        var sources = new List<TransferSource>(sourcePaths.Count);
+        for (var index = 0; index < sourcePaths.Count; index++)
+        {
+            var info = new FileInfo(sourcePaths[index]);
+            if (!info.Exists || info.Length != transfer.Items[index].Size) throw new IOException($"Source file changed since the transfer request: {info.Name}");
+            sources.Add(new TransferSource(transfer.Items[index].Id, transfer.Items[index].FileName, info.FullName, info.Length));
+        }
+
+        if (transports.SelectAutomatic() is DirectWifiTransport direct)
+        {
+            try
+            {
+                var done = await direct.UploadAcceptedAsync(transfer, sources, progress, cancellationToken);
+                if (done.Status == "Completed" && done.Transport == DirectWifiTransport.TransportName) return done;
+            }
+            catch (Exception ex) when (ex is IOException or InvalidOperationException or HttpRequestException && !cancellationToken.IsCancellationRequested)
+            {
+                // fall through to the pure relay path below
+            }
+        }
+
+        var relayTransport = transports.Get(TransferMode.ServerRelay);
+        var completedBytes = sources.Sum(source => source.Size);
+        var totalBytes = Math.Max(1, completedBytes);
+        var doneBytes = 0L;
+        foreach (var source in sources)
+        {
+            var before = doneBytes;
+            var sourceProgress = new Progress<TransferProgress>(value =>
+            {
+                var overall = Math.Clamp((doneBytes + value.TransferredBytes) / (double)totalBytes, 0, 1);
+                var speed = value.BytesPerSecond;
+                var remaining = speed > 0 ? TimeSpan.FromSeconds((totalBytes - doneBytes - value.TransferredBytes) / speed) : (TimeSpan?)null;
+                progress?.Report(new TransferProgress(transfer.Id, value.FileName, totalBytes,
+                    (long)(overall * totalBytes), speed, remaining, TransferMode.ServerRelay));
+            });
+            await relayTransport.UploadItemAsync(transfer.Id, source, transfer.ChunkSize, sourceProgress, cancellationToken);
+            doneBytes = before + source.Size;
+        }
+        return await api.CompleteTransferAsync(transfer.Id, cancellationToken);
+    }
+
+    /// <summary>Receiver flow: direct first when a channel exists, relay fallback otherwise.</summary>
+    public async Task<IReadOnlyList<string>> DownloadWithTransportAsync(TransferDto transfer, string destinationDirectory,
+        IProgress<TransferProgress>? progress, CancellationToken cancellationToken)
+    {
+        // The sender registers its LAN endpoint right after the receiver accepts; give it a short window.
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(20);
+        while (transfer.DirectInfo is null && DateTimeOffset.UtcNow < deadline)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+            transfer = await api.GetTransferAsync(transfer.Id, cancellationToken);
+        }
+        if (transfer.DirectInfo is not null)
+        {
+            var direct = (DirectWifiTransport)transports.Get(TransferMode.DirectWifi);
+            return await direct.ReceiveAllAsync(transfer, destinationDirectory, progress, cancellationToken);
+        }
+        await DownloadCoreAsync(transfer, destinationDirectory, cancellationToken);
+        return transfer.Items.Select(item => Path.Combine(destinationDirectory, item.FileName)).ToList();
     }
 
     public Task DownloadAsync(TransferDto transfer, string destinationDirectory, CancellationToken cancellationToken)

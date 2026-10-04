@@ -1,3 +1,4 @@
+import CryptoKit
 import SwiftUI
 
 @main
@@ -195,13 +196,48 @@ final class SessionStore: ObservableObject {
             }
             let accepted = try await waitForTransfer(created.transfer.id, terminal: ["Transferring", "Cancelled", "Failed"])
             guard accepted.status == "Transferring" else { throw APIClientError.transferState(accepted.status) }
-            let completed = try await api.uploadAcceptedTransfer(accepted, sourceURLs: urls) { [weak self] fraction, speed, eta in
-                self?.transferFraction = fraction
-                self?.transferSpeed = speed
-                self?.transferEta = eta
+
+            // Direct Wi-Fi attempt: serve chunks on the LAN and let the receiver pull them.
+            var lanServer: LanTransferServer?
+            if let lanIp = LanTransferServer.localIPv4() {
+                do {
+                    let token = LanTransferServer.generateToken()
+                    let server = try LanTransferServer(token: token)
+                    try server.start()
+                    for (item, url) in zip(created.transfer.items, urls) {
+                        server.publish(itemId: item.id, path: url.path, size: item.size)
+                    }
+                    try await api.registerDirectEndpoint(transferId: created.transfer.id, host: lanIp, port: Int(server.port), token: token)
+                    lanServer = server
+                } catch { lanServer = nil }
             }
-            replaceTransfer(completed)
-            transferFraction = 1
+
+            var terminal: TransferRecord?
+            if lanServer != nil {
+                let deadline = Date().addingTimeInterval(15 * 60)
+                while Date() < deadline {
+                    try Task.checkCancellation()
+                    let current = try await api.transfer(created.transfer.id)
+                    if ["Completed", "Failed", "Cancelled"].contains(current.status) { terminal = current; break }
+                    if current.relayRequested == true { break }
+                    try await Task.sleep(for: .seconds(2))
+                }
+                lanServer?.stop()
+            }
+
+            if let directFinal = terminal, directFinal.status == "Completed" {
+                replaceTransfer(directFinal)
+                transferFraction = 1
+            } else {
+                // Relay fallback (receiver asked for it, direct unavailable, or timed out).
+                let completed = try await api.uploadAcceptedTransfer(accepted, sourceURLs: urls) { [weak self] fraction, speed, eta in
+                    self?.transferFraction = fraction
+                    self?.transferSpeed = speed
+                    self?.transferEta = eta
+                }
+                replaceTransfer(completed)
+                transferFraction = 1
+            }
         } catch { errorMessage = error.localizedDescription }
         await refreshAll()
     }
@@ -212,15 +248,72 @@ final class SessionStore: ObservableObject {
         do {
             _ = try await api.transferAction(transfer.id, action: "accept")
             incomingTransfer = nil
-            let completed = try await waitForTransfer(transfer.id, terminal: ["Completed", "Failed", "Cancelled"])
-            guard completed.status == "Completed" else { throw APIClientError.transferState(completed.status) }
+            let active = try await waitForTransfer(transfer.id, terminal: ["Transferring", "Failed", "Cancelled"])
+            guard active.status == "Transferring" else { throw APIClientError.transferState(active.status) }
+
+            // Wait briefly for the sender to register its LAN endpoint.
+            var current = active
+            var deadline = Date().addingTimeInterval(20)
+            while current.directInfo == nil && Date() < deadline {
+                try await Task.sleep(for: .seconds(2))
+                current = try await api.transfer(transfer.id)
+            }
+
             let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appending(path: "HoshinoTransfer")
-            savedFiles = try await api.acceptAndDownload(TransferRecord(
-                id: completed.id, senderId: completed.senderId, receiverId: completed.receiverId,
-                status: completed.status, transport: completed.transport, expiresAt: completed.expiresAt,
-                chunkSize: completed.chunkSize, items: completed.items), to: folder)
+            var saved: [URL] = []
+            if let direct = current.directInfo, let host = direct.host.isEmpty ? nil : direct.host, let port = direct.port {
+                saved = try await downloadDirect(transfer: current, direct: direct, host: host, port: port, to: folder)
+                _ = try await api.completeDirectTransfer(transfer.id)
+            } else {
+                try await api.requestRelayFallback(transfer.id)
+                let completed = try await waitForTransfer(transfer.id, terminal: ["Completed", "Failed", "Cancelled"])
+                guard completed.status == "Completed" else { throw APIClientError.transferState(completed.status) }
+                for item in completed.items {
+                    let name = URL(fileURLWithPath: item.fileName).lastPathComponent
+                    let destination = folder.appending(path: "\(UUID().uuidString.prefix(8))_\(name)")
+                    try await api.download(item: item, transferId: completed.id, destination: destination)
+                    saved.append(destination)
+                }
+            }
+            savedFiles = saved
         } catch { errorMessage = error.localizedDescription }
         await refreshAll()
+    }
+
+    private func downloadDirect(transfer: TransferRecord, direct: DirectEndpointInfo, host: String, port: Int, to folder: URL) async throws -> [URL] {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        guard let token = direct.token else { throw APIClientError.invalidResponse }
+        var saved: [URL] = []
+        var downloaded = 0.0
+        let total = Double(max(1, transfer.items.reduce(0) { $0 + $1.size }))
+        for item in transfer.items {
+            let name = URL(fileURLWithPath: item.fileName).lastPathComponent
+            let destination = folder.appending(path: "\(UUID().uuidString.prefix(8))_\(name)")
+            FileManager.default.createFile(atPath: destination.path, contents: nil)
+            let handle = try FileHandle(forWritingTo: destination)
+            defer { try? handle.close() }
+            var hasher = SHA256()
+            let chunkSize = 4 * 1024 * 1024
+            var offset = 0
+            while offset < item.size {
+                try Task.checkCancellation()
+                let length = min(chunkSize, item.size - offset)
+                let index = offset / chunkSize
+                let urlString = "http://\(host):\(port)/hoshino/\(transfer.id)/\(item.id)/\(index)?token=\(token)"
+                guard let url = URL(string: urlString) else { throw APIClientError.invalidResponse }
+                let chunk = try await api.downloadDirectChunk(url: url)
+                guard chunk.count == length else { throw APIClientError.sourceChanged(item.fileName) }
+                try handle.write(contentsOf: chunk)
+                hasher.update(data: chunk)
+                offset += length
+                downloaded += Double(chunk.count)
+                transferFraction = min(1, downloaded / total)
+            }
+            let digest = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+            guard digest == item.sha256 else { throw APIClientError.hashMismatch(item.fileName) }
+            saved.append(destination)
+        }
+        return saved
     }
 
     func declineIncoming(_ transfer: TransferRecord) async {
