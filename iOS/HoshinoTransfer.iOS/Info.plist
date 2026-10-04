@@ -22,6 +22,8 @@
     <true/>
     <key>NSCameraUsageDescription</key>
     <string>The camera is used only to scan a device pairing QR code.</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>Photos are read only to detect a device pairing QR code in an image you choose.</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>HoshinoTransfer exchanges transfer bytes directly over the local Wi-Fi network when both devices are on the same network.</string>
     <key>UILaunchScreen</key>

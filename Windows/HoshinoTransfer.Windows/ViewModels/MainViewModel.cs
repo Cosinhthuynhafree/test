@@ -87,6 +87,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         RetryFailedMessagesCommand = new AsyncRelayCommand(RetryFailedMessagesAsync, () => !IsSending && _failedOutbox.Count > 0);
         RegisterDeviceCommand = new AsyncRelayCommand(RegisterDeviceAsync, () => !IsBusy && !string.IsNullOrWhiteSpace(DeviceName));
         CreatePairingCodeCommand = new AsyncRelayCommand(CreatePairingCodeAsync, () => !IsBusy);
+        ImportPairingImageCommand = new AsyncRelayCommand(PickPairingImageAsync, () => !IsBusy);
         PairDeviceCommand = new AsyncRelayCommand(PairDeviceAsync, () => !IsBusy && PairingCodeInput.Length == 8);
         RevokeDeviceCommand = new AsyncRelayCommand(RevokeSelectedDeviceAsync, () => !IsBusy && SelectedDevice is not null);
         OpenFilesCommand = new RelayCommand(OpenFiles);
@@ -115,8 +116,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public string DisplayName { get => _displayName; set => Set(ref _displayName, value); }
     public string Password { get => _password; set => Set(ref _password, value); }
     public string FriendUsername { get => _friendUsername; set => Set(ref _friendUsername, value); }
-    public string SearchQuery { get => _searchQuery; set { if (Set(ref _searchQuery, value)) SearchUsersCommand.NotifyCanExecuteChanged(); } }
-    public string PairingCode { get => _pairingCode; set { if (Set(ref _pairingCode, value)) PairDeviceCommand.NotifyCanExecuteChanged(); } }
+    public string SearchQuery { get => _searchQuery; set { if (Set(ref _searchQuery, value)) RaiseAllCanExecuteChanged(); } }
+    public string PairingCode { get => _pairingCode; set { if (Set(ref _pairingCode, value)) RaiseAllCanExecuteChanged(); } }
     public string PairingCodeDisplay { get => _pairingCodeDisplay; private set => Set(ref _pairingCodeDisplay, value); }
     public string PairingCodeHint { get => _pairingCodeHint; private set => Set(ref _pairingCodeHint, value); }
     public string PairingCodeInput
@@ -125,15 +126,15 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         set
         {
             var digits = new string((value ?? "").Where(char.IsDigit).Take(8).ToArray());
-            if (Set(ref _pairingCode, digits)) PairDeviceCommand.NotifyCanExecuteChanged();
+            if (Set(ref _pairingCode, digits)) RaiseAllCanExecuteChanged();
         }
     }
-    public string MessageDraft { get => _messageDraft; set { if (Set(ref _messageDraft, value)) SendMessageCommand.NotifyCanExecuteChanged(); } }
+    public string MessageDraft { get => _messageDraft; set { if (Set(ref _messageDraft, value)) RaiseAllCanExecuteChanged(); } }
     public string DeviceName { get => _deviceName; set => Set(ref _deviceName, value); }
     public bool IsRegisterMode { get => _isRegisterMode; set { if (Set(ref _isRegisterMode, value)) { OnPropertyChanged(nameof(AuthActionLabel)); OnPropertyChanged(nameof(AuthModePrompt)); } } }
-    public bool IsAuthenticated { get => _isAuthenticated; private set => Set(ref _isAuthenticated, value); }
-    public bool IsBusy { get => _isBusy; private set { if (Set(ref _isBusy, value)) { SubmitAuthCommand.NotifyCanExecuteChanged(); LogoutCommand.NotifyCanExecuteChanged(); RefreshBackendCommand.NotifyCanExecuteChanged(); RefreshDataCommand.NotifyCanExecuteChanged(); OnPropertyChanged(nameof(BusyLabel)); } } }
-    public bool IsSending { get => _isSending; private set { if (Set(ref _isSending, value)) SendMessageCommand.NotifyCanExecuteChanged(); } }
+    public bool IsAuthenticated { get => _isAuthenticated; private set { if (Set(ref _isAuthenticated, value)) RaiseAllCanExecuteChanged(); } }
+    public bool IsBusy { get => _isBusy; private set { if (Set(ref _isBusy, value)) { RaiseAllCanExecuteChanged(); OnPropertyChanged(nameof(BusyLabel)); } } }
+    public bool IsSending { get => _isSending; private set { if (Set(ref _isSending, value)) RaiseAllCanExecuteChanged(); } }
     public string ErrorMessage { get => _errorMessage; private set { if (Set(ref _errorMessage, value)) OnPropertyChanged(nameof(HasErrorMessage)); } }
     public string NoticeMessage { get => _noticeMessage; private set { if (Set(ref _noticeMessage, value)) OnPropertyChanged(nameof(HasNoticeMessage)); } }
     public bool HasErrorMessage => !string.IsNullOrEmpty(_errorMessage);
@@ -173,7 +174,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     }
     public string CurrentChatId { get => _currentChatId; private set => Set(ref _currentChatId, value); }
     public string CurrentPeerName { get => _currentPeerName; private set => Set(ref _currentPeerName, value); }
-    public string SelectedTransferId { get => _selectedTransferId; set { if (Set(ref _selectedTransferId, value)) { CancelTransferCommand.NotifyCanExecuteChanged(); PauseTransferCommand.NotifyCanExecuteChanged(); ResumeTransferCommand.NotifyCanExecuteChanged(); RetryTransferCommand.NotifyCanExecuteChanged(); OnPropertyChanged(nameof(ActiveTransportLabel)); } } }
+    public string SelectedTransferId { get => _selectedTransferId; set { if (Set(ref _selectedTransferId, value)) { RaiseAllCanExecuteChanged(); OnPropertyChanged(nameof(ActiveTransportLabel)); } } }
     public string ActiveTransportLabel
     {
         get
@@ -182,16 +183,15 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             return string.IsNullOrWhiteSpace(transfer?.Transport) ? "Direct Wi-Fi / Server Relay" : transfer.Transport;
         }
     }
-    public DeviceDto? SelectedDevice { get => _selectedDevice; set { if (Set(ref _selectedDevice, value)) RevokeDeviceCommand.NotifyCanExecuteChanged(); } }
-    public UserDto? SelectedSearchUser { get => _selectedSearchUser; set { if (Set(ref _selectedSearchUser, value)) AddSearchResultCommand.NotifyCanExecuteChanged(); } }
+    public DeviceDto? SelectedDevice { get => _selectedDevice; set { if (Set(ref _selectedDevice, value)) RaiseAllCanExecuteChanged(); } }
+    public UserDto? SelectedSearchUser { get => _selectedSearchUser; set { if (Set(ref _selectedSearchUser, value)) RaiseAllCanExecuteChanged(); } }
     public FriendDto? SelectedFriend
     {
         get => _selectedFriend;
         set
         {
             if (!Set(ref _selectedFriend, value)) return;
-            AcceptFriendCommand.NotifyCanExecuteChanged(); RejectFriendCommand.NotifyCanExecuteChanged();
-            RemoveFriendCommand.NotifyCanExecuteChanged(); BlockFriendCommand.NotifyCanExecuteChanged(); UnblockFriendCommand.NotifyCanExecuteChanged(); SelectFriendCommand.NotifyCanExecuteChanged();
+            RaiseAllCanExecuteChanged();
         }
     }
     public TransferDto? SelectedIncomingTransfer
@@ -200,12 +200,40 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         set
         {
             if (!Set(ref _selectedIncomingTransfer, value)) return;
-            AcceptTransferCommand.NotifyCanExecuteChanged(); DeclineTransferCommand.NotifyCanExecuteChanged();
+            RaiseAllCanExecuteChanged();
         }
     }
     public string AuthActionLabel => IsRegisterMode ? "Create account" : "Sign in";
     public string AuthModePrompt => IsRegisterMode ? "Already have an account? Sign in" : "New to HoshinoTransfer? Create an account";
     public string BusyLabel => IsBusy ? "Connecting securely…" : AuthActionLabel;
+
+    /// <summary>
+    /// RelayCommand does not hook CommandManager.RequerySuggested, so CanExecute is only
+    /// re-evaluated when NotifyCanExecuteChanged is called. Every command whose CanExecute
+    /// depends on IsBusy (or on a selection) must be refreshed together, otherwise a button
+    /// evaluated while IsBusy was true stays permanently disabled.
+    /// </summary>
+    private void RaiseAllCanExecuteChanged()
+    {
+        foreach (var command in AllCommands) command.NotifyCanExecuteChanged();
+    }
+
+    private IEnumerable<AsyncRelayCommand> AllCommands
+    {
+        get
+        {
+            yield return SubmitAuthCommand; yield return LogoutCommand; yield return RefreshBackendCommand;
+            yield return RefreshDataCommand; yield return RequestFriendCommand; yield return SearchUsersCommand;
+            yield return AddSearchResultCommand; yield return AcceptFriendCommand; yield return RejectFriendCommand;
+            yield return RemoveFriendCommand; yield return BlockFriendCommand; yield return UnblockFriendCommand;
+            yield return SelectFriendCommand; yield return SendMessageCommand; yield return RetryFailedMessagesCommand;
+            yield return RegisterDeviceCommand; yield return CreatePairingCodeCommand; yield return PairDeviceCommand;
+            yield return ImportPairingImageCommand;
+            yield return RevokeDeviceCommand; yield return AcceptTransferCommand; yield return DeclineTransferCommand;
+            yield return CancelTransferCommand; yield return PauseTransferCommand; yield return ResumeTransferCommand;
+            yield return RetryTransferCommand;
+        }
+    }
 
     public AsyncRelayCommand SubmitAuthCommand { get; }
     public RelayCommand<string> NavigateCommand { get; }
@@ -226,6 +254,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public AsyncRelayCommand RetryFailedMessagesCommand { get; }
     public AsyncRelayCommand RegisterDeviceCommand { get; }
     public AsyncRelayCommand CreatePairingCodeCommand { get; }
+    public AsyncRelayCommand ImportPairingImageCommand { get; }
     public AsyncRelayCommand PairDeviceCommand { get; }
     public AsyncRelayCommand RevokeDeviceCommand { get; }
     public RelayCommand OpenFilesCommand { get; }
@@ -495,34 +524,64 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         {
             var result = await _api.CreatePairingCodeAsync(_lifetime.Token);
             PairingCodeDisplay = result.PairingCode;
-            PairingQrImage = RenderPairingQr(result.PairingCode);
+            PairingQrImage = QrPairing.RenderPng(PairingPayload.BuildLink(_api.BaseAddress.ToString(), result.PairingCode));
             PairingCodeHint = PairingQrImage is null
                 ? $"Expires in {result.ExpiresInSeconds / 60} minutes. Type the code on the second device."
-                : $"Expires in {result.ExpiresInSeconds / 60} minutes. Scan the QR or type the code on the second device.";
+                : $"Expires in {result.ExpiresInSeconds / 60} minutes. Scan the QR, or drop a screenshot of it onto this window, or pick the image below.";
             NoticeMessage = $"Pairing code {result.PairingCode} created. It expires in {result.ExpiresInSeconds / 60} minutes.";
         }
         catch (Exception ex) when (ex is ApiException or HttpRequestException or TaskCanceledException) { ErrorMessage = $"Could not create a pairing code: {ex.Message}"; }
         finally { IsBusy = false; }
     }
 
-    private static System.Windows.Media.ImageSource? RenderPairingQr(string code)
+    /// <summary>
+    /// Detects a pairing QR inside an image file and redeems it immediately. Accepts the API
+    /// link this app encodes, the older hoshinotransfer:// scheme, or a bare eight-digit code.
+    /// </summary>
+    private async Task ImportPairingImageAsync(string path)
     {
+        ErrorMessage = ""; IsBusy = true;
         try
         {
-            using var generator = new QRCoder.QRCodeGenerator();
-            var data = generator.CreateQrCode($"hoshinotransfer://pair?code={code}", QRCoder.QRCodeGenerator.ECCLevel.M);
-            using var pngRenderer = new QRCoder.PngByteQRCode(data);
-            var png = pngRenderer.GetGraphic(8);
-            var image = new System.Windows.Media.Imaging.BitmapImage();
-            using var stream = new MemoryStream(png);
-            image.BeginInit();
-            image.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
-            image.StreamSource = stream;
-            image.EndInit();
-            image.Freeze();
-            return image;
+            var text = QrPairing.DecodeImageFile(path);
+            if (string.IsNullOrWhiteSpace(text)) { ErrorMessage = "No QR code was found in that image."; return; }
+            var code = PairingPayload.ExtractCode(text);
+            if (code is null) { ErrorMessage = $"That QR code is not a HoshinoTransfer pairing code: {text}"; return; }
+            PairingCodeInput = code;
+            NoticeMessage = $"Pairing code {code} detected in the image. Pairing…";
+            var device = await _api.PairDeviceAsync(code, DeviceName, "Windows", _lifetime.Token);
+            PairingCodeInput = "";
+            NoticeMessage = $"Device paired from image: {device.DeviceName}.";
+            await RefreshDataAsync();
         }
-        catch { return null; }
+        catch (Exception ex) when (ex is ApiException or HttpRequestException or TaskCanceledException) { ErrorMessage = $"Could not pair from the image: {ex.Message}"; }
+        finally { IsBusy = false; }
+    }
+
+    public void SendDroppedQrImage(string path)
+    {
+        if (!IsAuthenticated) return;
+        Page = "Devices"; PageDescription = DescriptionFor("Devices");
+        _ = RunGuardedAsync(() => ImportPairingImageAsync(path));
+    }
+
+    private async Task RunGuardedAsync(Func<Task> action)
+    {
+        try { await action(); }
+        catch (Exception ex) when (ex is ApiException or HttpRequestException or TaskCanceledException) { ErrorMessage = ex.Message; }
+    }
+
+    private async Task PickPairingImageAsync()
+    {
+        var picker = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Pick an image containing a pairing QR code",
+            Multiselect = false,
+            CheckFileExists = true,
+            Filter = "Images|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp;*.tif;*.tiff|All files|*.*",
+        };
+        if (picker.ShowDialog() != true) return;
+        await ImportPairingImageAsync(picker.FileName);
     }
 
     private async Task PairDeviceAsync()

@@ -4,11 +4,10 @@ import UniformTypeIdentifiers
 import UIKit
 
 enum PairingQR {
-    /// Renders the pairing deep link as a QR bitmap for the other device's camera.
-    static func image(for code: String, size: CGFloat = 220) -> UIImage? {
-        let payload = "hoshinotransfer://pair?code=\(code)"
+    /// Renders the pairing API link as a QR bitmap for the other device's camera or photo.
+    static func image(for link: String, size: CGFloat = 220) -> UIImage? {
         let filter = CIFilter.qrCodeGenerator()
-        filter.message = Data(payload.utf8)
+        filter.message = Data(link.utf8)
         filter.correctionLevel = "M"
         guard let output = filter.outputImage else { return nil }
         let scaled = output.transformed(by: CGAffineTransform(scaleX: size / output.extent.width, y: size / output.extent.height))
@@ -20,6 +19,7 @@ enum PairingQR {
 
 struct PairingCodeCard: View {
     let code: PairingCode
+    let link: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -27,7 +27,7 @@ struct PairingCodeCard: View {
             Text(code.pairingCode)
                 .font(.title2.monospaced().weight(.bold))
                 .textSelection(.enabled)
-            if let image = PairingQR.image(for: code.pairingCode) {
+            if let image = PairingQR.image(for: link) {
                 Image(uiImage: image)
                     .interpolation(.none)
                     .resizable()
@@ -36,7 +36,10 @@ struct PairingCodeCard: View {
                     .background(Color.white)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
             }
-            Text("Scan the QR or type the code on the other signed-in device. Expires in \(max(1, code.expiresInSeconds / 60)) minutes.")
+            Text(link)
+                .font(.caption2).foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            Text("Scan the QR, or import a photo of it on the other device. Expires in \(max(1, code.expiresInSeconds / 60)) minutes.")
                 .font(.footnote).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -46,6 +49,7 @@ struct PairingCodeCard: View {
 
 struct RootView: View {
     @EnvironmentObject private var session: SessionStore
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         Group {
@@ -59,6 +63,11 @@ struct RootView: View {
         .sheet(item: $session.incomingTransfer) { transfer in
             TransferRequestSheet(transfer: transfer)
                 .presentationDetents([.medium, .large])
+        }
+        .onChange(of: scenePhase) { phase in
+            if phase == .active {
+                Task { await session.sceneBecameActive() }
+            }
         }
     }
 }
@@ -333,7 +342,7 @@ struct DevicesView: View {
                           systemImage: "qrcode")
                 }
                 if let code = session.pairingCode {
-                    PairingCodeCard(code: code)
+                    PairingCodeCard(code: code, link: session.pairingLink(for: code.pairingCode))
                     Button("Clear", role: .destructive) { session.clearPairingCode() }
                         .font(.footnote)
                 }
@@ -355,7 +364,7 @@ struct DevicesView: View {
                 }
                 .disabled(pairingInput.count != 8 || session.isWorking)
                 NavigationLink { PairByQRView() } label: {
-                    Label("Scan pairing QR code", systemImage: "qrcode.viewfinder")
+                    Label("Scan or import a pairing QR", systemImage: "qrcode.viewfinder")
                 }
             }
             Section("Registered devices") {

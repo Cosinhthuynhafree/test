@@ -39,6 +39,7 @@ final class SessionStore: ObservableObject {
 
     private let api = APIClient()
     private var eventsTask: Task<Void, Never>?
+    private var pollingTask: Task<Void, Never>?
     private var typingTask: Task<Void, Never>?
     private var knownFileURLs: [String: [URL]] = [:]
     private var lastProgressRefresh: Date?
@@ -73,6 +74,7 @@ final class SessionStore: ObservableObject {
                 try await ensureDeviceRegistered()
                 await refreshAll()
                 startEventStream()
+                startPolling()
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -89,11 +91,13 @@ final class SessionStore: ObservableObject {
         errorMessage = nil
         try await ensureDeviceRegistered()
         startEventStream()
+        startPolling()
         await refreshAll()
     }
 
     func signOut() async {
         eventsTask?.cancel(); eventsTask = nil
+        pollingTask?.cancel(); pollingTask = nil
         typingTask?.cancel(); typingTask = nil
         do { try await api.logout() } catch { errorMessage = error.localizedDescription }
         user = nil; friends = []; searchResults = []; devices = []; chats = []; messages = []; transfers = []
@@ -167,6 +171,11 @@ final class SessionStore: ObservableObject {
     }
 
     func clearPairingCode() { pairingCode = nil }
+
+    /// The API link encoded into the pairing QR, so the other device learns which service to use.
+    func pairingLink(for code: String) -> String {
+        PairingPayload.link(base: api.baseURL, code: code)
+    }
 
     func pairDevice(code: String, name: String) async {
         let digits = code.filter(\.isNumber)
@@ -497,6 +506,9 @@ final class SessionStore: ObservableObject {
                             await self.handleEvent(eventName, data: data)
                         }
                     }
+                    // The server ends the stream when the access token expires. Without a
+                    // pause this loop would hot-reconnect without delay.
+                    try? await Task.sleep(for: .seconds(1))
                 } catch {
                     self.connectionStatus = "Reconnecting…"
                     try? await Task.sleep(for: .seconds(2))
@@ -504,6 +516,29 @@ final class SessionStore: ObservableObject {
             }
             self.connectionStatus = "Disconnected"
         }
+    }
+
+    /// SSE alone is not enough: the stream drops whenever iOS suspends the app, the tunnel
+    /// changes, or the token is rotated. A low-frequency poll keeps the UI honest either way.
+    private func startPolling() {
+        pollingTask?.cancel()
+        pollingTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled && self.isAuthenticated {
+                try? await Task.sleep(for: .seconds(10))
+                guard !Task.isCancelled, self.isAuthenticated else { return }
+                await self.refreshAll()
+                await self.refreshChatIfOpen()
+            }
+        }
+    }
+
+    /// Called when the app returns to the foreground.
+    func sceneBecameActive() async {
+        guard isAuthenticated else { return }
+        await refreshAll()
+        await refreshChatIfOpen()
+        if eventsTask == nil || connectionStatus != "Connected" { startEventStream() }
     }
 
     private func handleEvent(_ name: String, data: Data) async {
@@ -532,6 +567,13 @@ final class SessionStore: ObservableObject {
             }
         case "transfer.completed", "transfer.failed", "transfer.cancelled":
             await refreshAll()
+        case "transfer.direct", "transfer.candidates", "transfer.fallback":
+            // Channel announcements: the transfer record itself changed, so refresh it.
+            // These used to fall through to `default:` and update nothing at all, which left
+            // the receiver waiting for a Direct Wi-Fi or P2P channel that never appeared.
+            await refreshTransfersOnly()
+        case "chat.typing":
+            break
         default:
             if name.hasPrefix("friend.") || name.hasPrefix("device.") || name.hasPrefix("chat.") { await refreshAll() }
         }

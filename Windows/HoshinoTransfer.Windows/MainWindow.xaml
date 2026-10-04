@@ -463,7 +463,7 @@
                                                     <TextBlock Text="Single-use code, expires in 5 minutes. The other device must be signed in to this account." Style="{StaticResource MutedText}" Margin="0,6,0,10" />
                                                     <Button Content="Create pairing code" HorizontalAlignment="Left" Command="{Binding DataContext.CreatePairingCodeCommand, RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource PrimaryButton}" />
                                                     <Grid Margin="0,12,0,0">
-                                                        <Grid.Style><Style TargetType="Grid"><Setter Property="Visibility" Value="Collapsed" /><Style.Triggers><DataTrigger Binding="{Binding DataContext.PairingCodeDisplay, RelativeSource={RelativeSource AncestorType=Window}}" Value=""><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers></Style></Grid.Style>
+                                                        <Grid.Style><Style TargetType="Grid"><Setter Property="Visibility" Value="Visible" /><Style.Triggers><DataTrigger Binding="{Binding DataContext.PairingCodeDisplay, RelativeSource={RelativeSource AncestorType=Window}}" Value=""><Setter Property="Visibility" Value="Collapsed" /></DataTrigger></Style.Triggers></Style></Grid.Style>
                                                         <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                                         <Border Grid.Column="0" Background="#10141F" BorderBrush="#3A3468" BorderThickness="1" CornerRadius="11" Padding="11" VerticalAlignment="Top">
                                                             <StackPanel>
@@ -483,6 +483,10 @@
                                                         <Button DockPanel.Dock="Right" Content="Pair" Command="{Binding DataContext.PairDeviceCommand, RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource PrimaryButton}" Margin="10,0,0,0" />
                                                         <TextBox Text="{Binding DataContext.PairingCodeInput, RelativeSource={RelativeSource AncestorType=Window}, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource InputBox}" MaxLength="8" ToolTip="Eight-digit pairing code" />
                                                     </DockPanel>
+                                                    <Button Content="Detect QR from image…" HorizontalAlignment="Left" Margin="0,10,0,0"
+                                                            Command="{Binding DataContext.ImportPairingImageCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                            Style="{StaticResource GhostButton}" Padding="14,6" />
+                                                    <TextBlock Text="Or drag an image of the QR code onto this window." Style="{StaticResource MutedText}" Margin="0,7,0,0" TextWrapping="Wrap" />
                                                 </StackPanel>
                                             </Border>
                                         </Grid>
